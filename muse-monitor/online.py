@@ -35,6 +35,7 @@ class LSLStreamer(threading.Thread):
         # thread control
         self.updated = threading.Event()
         self.lock = threading.Lock()
+        self.proceed = True
 
         # streaming data type and initialization
         self.dtype = np.dtype([('time', np.float64),
@@ -43,9 +44,10 @@ class LSLStreamer(threading.Thread):
 
     def run(self):
         try:
-            while True:
-                samples, timestamps = self.inlet.pull_chunk(timeout=1.0,
-                                                            max_samples=self.chunk_samples)
+            pull_chunk = self.inlet.pull_chunk
+            while self.proceed:
+                samples, timestamps = pull_chunk(timeout=1.0,
+                                                 max_samples=self.chunk_samples)
                 if timestamps:
                     if self.dejitter:
                         timestamps = self.dejitter_timestamps(timestamps)
@@ -55,7 +57,6 @@ class LSLStreamer(threading.Thread):
                         self.new_data = new_data
                         self.__update_data()
                     self.updated.set()
-
 
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
@@ -95,7 +96,7 @@ class LSLStreamer(threading.Thread):
         return list(next_ch_name())
 
 
-class LSLDataStore(threading.Thread):
+class LSLRecorder(threading.Thread):
 
     def __init__(self, lsl_streamer):
         threading.Thread.__init__(self)
@@ -106,11 +107,11 @@ class LSLDataStore(threading.Thread):
     def run(self):
         pass
 
-    def store(self, time, relative_time=True):
-        n_samples = int(time * self.streamer.sfreq)
+    def store(self, length, relative_time=True):
+        n_samples = int(length * self.streamer.sfreq)
         self.init_data()
         self.streamer.updated.clear()
-        while len(self.data) < n_samples:
+        while self.data.shape[0] < n_samples:
             self.streamer.updated.wait()
             with self.streamer.lock:
                 self.__get_new_data()
@@ -118,6 +119,21 @@ class LSLDataStore(threading.Thread):
         self.data = self.data[-n_samples:]
         if relative_time:
             self.data['time'] -= self.data['time'][0]
+
+    def record_trial(self, spec, prompt=True, relative_time=True):
+        if prompt:
+            if 'msg' in spec:
+                print(spec['msg'])
+            print('Press Enter when ready to start recording.')
+            raw_input()
+        self.store(spec['length'], relative_time=relative_time)
+        return self.data
+
+    def record_trials(self, specs, prompt=True, to_disk=False,
+                       relative_time=True):
+        trials = [self.record_trial(spec, prompt, relative_time)
+                  for spec in specs]
+        return trials
 
     def init_data(self):
         self.data = np.zeros(0, dtype=self.dtype)
