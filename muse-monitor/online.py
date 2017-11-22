@@ -39,7 +39,7 @@ class LSLStreamer(threading.Thread):
 
         # streaming data type and initialization
         self.dtype = np.dtype([('time', np.float64),
-                               ('ch_values', np.float64, self.n_chan)])
+                               ('samples', np.float64, self.n_chan)])
         self.init_data()
 
     def run(self):
@@ -125,14 +125,14 @@ class LSLRecorder(threading.Thread):
             if 'msg' in spec:
                 print(spec['msg'])
             print('Press Enter when ready to start recording.')
-            raw_input()
+            input()
         self.store(spec['length'], relative_time=relative_time)
         return self.data
 
     def record_trials(self, specs, prompt=True, to_disk=False,
                        relative_time=True):
-        trials = [self.record_trial(spec, prompt, relative_time)
-                  for spec in specs]
+        trials = {spec['label']: self.record_trial(spec, prompt, relative_time)
+                  for spec in specs}
         return trials
 
     def init_data(self):
