@@ -22,9 +22,5 @@ if __name__ == '__main__':
               'msg': "Please focus visually and concentrate."},
              {'length': 60,
               'msg': "Please close your eyes and relax."}]
+    streamer.start()
     trials = recorder.record_trials(specs)
-
-    #gui.init_eegplot()
-
-    #streamer.start() # start EEG streamer thread
-    #streamer.join() # wait for EEG streamer to stop streaming
