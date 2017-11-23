@@ -13,8 +13,8 @@ EEG_BANDS = {
     "hi_alpha": (10, 12),
     "low_beta": (12, 21),
     "hi_beta": (21, 30),
-    "alpha": (8, 12),
-    "beta": (12, 30),
+    # "alpha": (8, 12),
+    # "beta": (12, 30),
 }
 """dict: Default EEG bands, ex. for feature separation."""
 
@@ -57,7 +57,7 @@ def calc_psd(samples, sfreq):
 def calc_feature_vector(samples, sfreq, bands=EEG_BANDS):
     psd = calc_psd(samples, sfreq)
     f = sfreq/2 * np.linspace(0, 1, len(psd))
-    feature_vector = np.array([make_features(band, psd, f)
+    feature_vector = np.ravel([make_features(band, psd, f)
                                for band in bands.items()])
     return feature_vector
 
@@ -65,7 +65,7 @@ def calc_feature_vector(samples, sfreq, bands=EEG_BANDS):
 def make_features(band, psd, cutoff):
     freqs = band[1]  # get dict values, not key
     ind = np.where((cutoff >= freqs[0]) & (cutoff <= freqs[1]))
-    return np.nan_to_num(np.mean(psd[ind, :]))
+    return np.nan_to_num(np.mean(psd[ind, :], axis=1))
 
 
 def calc_feature_matrix(epochs, sfreq):
