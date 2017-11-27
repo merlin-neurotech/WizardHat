@@ -4,6 +4,8 @@
 Management of data streams or other online processes.
 """
 
+import utils
+
 from serial.serialutil import SerialException
 import threading
 
@@ -84,7 +86,7 @@ class LSLStreamer(threading.Thread):
                 samples, timestamps = self.__pull_chunk()
                 if timestamps:
                     if self.dejitter:
-                        timestamps = self.dejitter_timestamps(timestamps)
+                        timestamps = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq, last_time=self.data['time'][-1])
                     new_data = np.array(list(zip(timestamps, samples)),
                                         dtype=self.__dtype)
                     with self.lock:
@@ -105,13 +107,6 @@ class LSLStreamer(threading.Thread):
         """Append most recent chunk to stored data and retain window size."""
         self.data = np.concatenate([self.data, self.new_data], axis=0)
         self.data = self.data[-self.n_samples:]
-
-    def dejitter_timestamps(self, timestamps):
-        """Convert timestamps to regular sampling intervals."""
-        dejittered = np.arange(len(timestamps), dtype=np.float64)
-        dejittered /= self.sfreq
-        dejittered += self.data['time'][-1] + 1./self.sfreq
-        return dejittered
 
     @staticmethod
     def get_lsl_inlet(stream_type='EEG'):
