@@ -19,7 +19,32 @@ EEG_BANDS = {
 """dict: Default EEG bands, ex. for feature separation."""
 
 
+def dejitter_timestamps(timestamps, sfreq, last_time=None):
+        """Convert timestamps to have regular sampling intervals.
+
+        Args:
+            timestamps (List[float]): A list of timestamps.
+            sfreq (int): The sampling frequency.
+            last_time (float): Time of the last sample preceding this set of
+                timestamps. Defaults to `-1/sfreq`.
+        """
+        if last_time is None:
+            last_time = -1/sfreq
+        dejittered = np.arange(len(timestamps), dtype=np.float64)
+        dejittered /= sfreq
+        dejittered += last_time + 1/sfreq
+        return dejittered
+
+
 def epoching(samples, samples_epoch, samples_overlap=0):
+    """Split samples into epochs of uniform size.
+
+    Args:
+        samples (numpy.ndarray):
+        samples_epoch (int): Number of samples per epoch.
+        samples_overlap (int, optional): Samples of overlap between adjacent
+            epochs.
+    """
     n_samples, n_chan = samples.shape
 
     samples_shift = int(samples_epoch - samples_overlap)
@@ -36,7 +61,14 @@ def epoching(samples, samples_epoch, samples_overlap=0):
     return epochs, remainder
 
 
-def calc_fft(samples, sfreq, real_out=True):
+def calc_fft(samples, real_out=True):
+    """Calculate the FFT from an array of samples.
+
+    Args:
+        samples (numpy.ndarray): Time-domain samples.
+        real_out (bool): Whether to return only the first half of the result,
+            which is sufficient for the real-valued frequency domain.
+    """
     n_samples, n_chan = samples.shape
     hamming_window = np.hamming(n_samples)
     samples_centered = samples - np.mean(samples, axis=0)
@@ -48,47 +80,52 @@ def calc_fft(samples, sfreq, real_out=True):
     return fft
 
 
-def calc_psd(samples, sfreq):
-    fft = calc_fft(samples, sfreq)
+def calc_psd(samples):
+    """Calculate the power spectral density from an array of samples.
+
+    Args:
+        samples (numpy.ndarray): Time-domain samples.
+    """
+    fft = calc_fft(samples)
     psd = 2 * np.abs(fft)
     return psd
 
 
-def calc_feature_vector(samples, sfreq, bands=EEG_BANDS):
-    psd = calc_psd(samples, sfreq)
-    f = sfreq/2 * np.linspace(0, 1, len(psd))
-    feature_vector = np.ravel([make_features(band, psd, f)
+def calc_psd_band_means(samples, sfreq, bands=EEG_BANDS):
+    """Calculate band PSD means from an array of samples.
+
+    Args:
+        samples (numpy.ndarray): Time-domain samples.
+        sfreq (int): Sampling frequency.
+        bands (Dict[str, tuple]): Maps band names to band hi and lo bounds.
+    """
+    psd = calc_psd(samples)
+    fft_freqs = sfreq/2 * np.linspace(0, 1, len(psd))
+    feature_vector = np.ravel([psd_band_mean(psd, band, fft_freqs)
                                for band in bands.items()])
     return feature_vector
 
 
-def make_features(band, psd, cutoff):
-    freqs = band[1]  # get dict values, not key
-    ind = np.where((cutoff >= freqs[0]) & (cutoff <= freqs[1]))
+def psd_band_mean(psd, band, fft_freqs):
+    """Calculate the PSD mean for a given band.
+
+    Args:
+        band (Dict[str, tuple]): Maps the band name to the
+        psd (numpy.ndarray): The full power spectral density.
+        fft_freqs (numpy.ndarray): FFT frequencies associated with the PSD.
+    """
+    bounds = band[1]  # get dict values, not key
+    ind = np.where((fft_freqs >= bounds[0]) & (fft_freqs <= bounds[1]))
     return np.nan_to_num(np.mean(psd[ind, :], axis=1))
 
 
-def calc_feature_matrix(epochs, sfreq):
+def feature_matrix(epochs, sfreq):
+    """Calculate the feature matrix from a set of epochs."""
     n_epochs = epochs.shape[2]
-    feat = calc_feature_vector(epochs[:, :, 0], sfreq).T
+    feat = calc_psd_band_means(epochs[:, :, 0], sfreq).T
     feature_matrix = np.zeros((n_epochs, feat.shape[0]))
 
     for i_epoch in range(n_epochs):
         feature_matrix[i_epoch, :] = \
-            calc_feature_vector(epochs[:, :, i_epoch], sfreq).T
+            calc_psd_band_means(epochs[:, :, i_epoch], sfreq).T
     return feature_matrix
-
-
-def epoching_alt(samples, samples_epoch, samples_overlap=0):
-    n_samples, n_chan = samples.shape
-    n_epochs = n_samples // samples_epoch
-    epoched_samples = n_epochs * samples_epoch
-    data_, remainder = np.split(samples, np.array([epoched_samples]))
-
-    ind_rows = np.arange(epoched_samples).reshape(samples_epoch, n_epochs).T
-    ind_rows = np.ravel(np.repeat(ind_rows, n_chan, axis=0))
-    ind_cols = np.tile(np.repeat(np.arange(n_chan), n_epochs), samples_epoch)
-
-    epochs = data_[ind_rows, ind_cols].reshape(samples_epoch, n_chan, n_epochs)
-
-    return epochs, remainder
