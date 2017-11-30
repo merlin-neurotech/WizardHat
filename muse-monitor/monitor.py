@@ -25,7 +25,7 @@ if __name__ == '__main__':
               'msg': "Please focus visually and concentrate."},
              {'length': 30, 'label': 1,
               'msg': "Please close your eyes and relax."}]
-    streamer.start()
+
     trials = recorder.record_trials(specs)
     epoched = {label: utils.epoching(data['samples'], 100, samples_overlap=0)
                for label, data in trials.items()}

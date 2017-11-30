@@ -67,7 +67,7 @@ class LSLStreamer(threading.Thread):
         self.proceed = True
 
         # data type and initialization
-        self.__dtype = np.dtype([('times', np.float64),
+        self.__dtype = np.dtype([('time', np.float64),
                                  ('samples', np.float64, self.n_chan)])
         self.init_data()
         self.__pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
@@ -78,8 +78,6 @@ class LSLStreamer(threading.Thread):
 
     def run(self):
         """Streaming thread. Overrides `threading.Thread.run`.
-
-        Loops while ``
         """
         try:
             while self.proceed:
