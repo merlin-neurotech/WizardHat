@@ -67,10 +67,11 @@ class LSLStreamer(threading.Thread):
         self.proceed = True
 
         # data type and initialization
-        samples_dtype = np.dtype({'names': get_ch_names(info),
+        channels_dtype = np.dtype({'names': get_ch_names(info),
                                   'formats': ['f8'] * self.n_chan})
-        self.__dtype = np.dtype([('time', 'f8'), ('samples', samples_dtype)])
+        self.__dtype = np.dtype([('time', 'f8'), ('channels', channels_dtype)])
         self.init_data()
+        self.new_data = np.zeros(0, dtype=self.__dtype)
 
         # function aliases
         self.__pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
@@ -86,7 +87,7 @@ class LSLStreamer(threading.Thread):
                 samples, timestamps = self.__pull_chunk()
                 if timestamps:
                     if self.dejitter:
-                        timestamps = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq, last_time=self.data['time'][-1])
+                        timestamps = self.__dejitter_timestamps(timestamps)
                     new_data = self.__format_data_array(timestamps, samples)
                     with self.lock:
                         self.new_data = new_data
@@ -102,6 +103,12 @@ class LSLStreamer(threading.Thread):
             self.data = np.zeros((self.n_samples,), dtype=self.__dtype)
             self.data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
 
+    def __dejitter_timestamps(self, timestamps):
+        """Partial function for more concise call during loop."""
+        dejittered = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq,
+                                               last_time=self.data['time'][-1])
+        return dejittered
+
     def __format_data_array(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         samples_tuples = [tuple(sample) for sample in samples]
@@ -116,8 +123,8 @@ class LSLStreamer(threading.Thread):
 
     @property
     def ch_names(self):
-        """Names of channels in associated LSL inlet."""
-        return self.data['samples'].dtype.names
+        """Names of channels from associated LSL inlet."""
+        return self.data.dtype['channels'].names
 
     @property
     def window(self):
