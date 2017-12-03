@@ -18,7 +18,6 @@ class LSLStreamer(threading.Thread):
 
     Attributes:
         inlet (pylsl.StreamInlet): The LSL inlet from which to stream data.
-        window (float): Seconds of most recent data to store.
         data (numpy.ndarray): Most recent `n_samples` streamed from inlet.
             `'samples'` initialized to zeros, some of which will remain before
             the first `n_samples` have been streamed.
@@ -27,11 +26,14 @@ class LSLStreamer(threading.Thread):
         sfreq (int): Sampling frequency of associated LSL inlet.
         n_chan (int): Number of channels in associated LSL inlet.
         n_samples (int): Number of most recent samples to store.
-        ch_names (List[str]): Names of channels in associated LSL inlet.
+
         updated (threading.Event): Flag when new data is pulled.
         lock (threading.Lock): Thread lock for safe access to streamed data.
         proceed (bool): Whether to keep streaming; set to False to end stream
             after current chunk.
+
+    TODO:
+        Exclude channels by name.
     """
 
     def __init__(self, inlet=None, window=5, dejitter=True, chunk_samples=12,
@@ -51,7 +53,6 @@ class LSLStreamer(threading.Thread):
         if inlet is None:
             inlet = self.get_lsl_inlet()
         self.inlet = inlet
-        self.window = window
         self.dejitter = dejitter
 
         # inlet parameters
@@ -59,7 +60,6 @@ class LSLStreamer(threading.Thread):
         self.sfreq = info.nominal_srate()
         self.n_samples = int(window * self.sfreq)
         self.n_chan = info.channel_count()
-        self.ch_names = self.get_ch_names(info)
 
         # thread control
         self.updated = threading.Event()
@@ -67,9 +67,12 @@ class LSLStreamer(threading.Thread):
         self.proceed = True
 
         # data type and initialization
-        self.__dtype = np.dtype([('time', np.float64),
-                                 ('samples', np.float64, self.n_chan)])
+        samples_dtype = np.dtype({'names': get_ch_names(info),
+                                  'formats': ['f8'] * self.n_chan})
+        self.__dtype = np.dtype([('time', 'f8'), ('samples', samples_dtype)])
         self.init_data()
+
+        # function aliases
         self.__pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
                                                      max_samples=chunk_samples)
 
@@ -77,16 +80,14 @@ class LSLStreamer(threading.Thread):
             self.start()
 
     def run(self):
-        """Streaming thread. Overrides `threading.Thread.run`.
-        """
+        """Streaming thread. Overrides `threading.Thread.run`."""
         try:
             while self.proceed:
                 samples, timestamps = self.__pull_chunk()
                 if timestamps:
                     if self.dejitter:
                         timestamps = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq, last_time=self.data['time'][-1])
-                    new_data = np.array(list(zip(timestamps, samples)),
-                                        dtype=self.__dtype)
+                    new_data = self.__format_data_array(timestamps, samples)
                     with self.lock:
                         self.new_data = new_data
                         self.__update_data()
@@ -101,30 +102,31 @@ class LSLStreamer(threading.Thread):
             self.data = np.zeros((self.n_samples,), dtype=self.__dtype)
             self.data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
 
+    def __format_data_array(self, timestamps, samples):
+        """Format data `numpy.ndarray` from timestamps and samples."""
+        samples_tuples = [tuple(sample) for sample in samples]
+        data_array = np.array(list(zip(timestamps, samples_tuples)),
+                            dtype=self.__dtype)
+        return data_array
+
     def __update_data(self):
         """Append most recent chunk to stored data and retain window size."""
         self.data = np.concatenate([self.data, self.new_data], axis=0)
         self.data = self.data[-self.n_samples:]
 
-    @staticmethod
-    def get_lsl_inlet(stream_type='EEG'):
-        """Resolve an LSL stream and return the corresponding inlet."""
-        streams = lsl.resolve_stream('type', stream_type)
-        try:
-            inlet = lsl.StreamInlet(streams[0])
-        except IndexError:
-            raise IOError("No stream resolved by LSL.")
-        return inlet
+    @property
+    def ch_names(self):
+        """Names of channels in associated LSL inlet."""
+        return self.data['samples'].dtype.names
 
-    @staticmethod
-    def get_ch_names(info):
-        """Return the channel names associated with an LSL inlet."""
-        def next_ch_name():
-            ch_xml = info.desc().child('channels').first_child()
-            for ch in range(info.channel_count()):
-                yield ch_xml.child_value('label')
-                ch_xml = ch_xml.next_sibling()
-        return list(next_ch_name())
+    @property
+    def window(self):
+        """Actual number of seconds stored.
+
+        Not necessarily the same as the requested window size due to flooring
+        to the nearest sample.
+        """
+        return self.n_samples / self.sfreq
 
 
 class LSLRecorder(threading.Thread):
@@ -209,3 +211,37 @@ class LSLRecorder(threading.Thread):
 
     def __get_new_data(self):
         self.data = np.concatenate([self.data, self.streamer.new_data], axis=0)
+
+
+def get_lsl_inlet(stream_type='EEG'):
+    """Resolve an LSL stream and return the corresponding inlet.
+
+    Args:
+        stream_type (str): Type of LSL stream to resolve.
+
+    Returns:
+        pylsl.StreamInlet: LSL inlet of resolved stream.
+    """
+    streams = lsl.resolve_stream('type', stream_type)
+    try:
+        inlet = lsl.StreamInlet(streams[0])
+    except IndexError:
+        raise IOError("No stream resolved by LSL.")
+    return inlet
+
+
+def get_ch_names(info):
+    """Return the channel names associated with an LSL inlet.
+
+    Args:
+        info ():
+
+    Returns:
+        List[str]: Channel names.
+    """
+    def next_ch_name():
+        ch_xml = info.desc().child('channels').first_child()
+        for ch in range(info.channel_count()):
+            yield ch_xml.child_value('label')
+            ch_xml = ch_xml.next_sibling()
+    return list(next_ch_name())
