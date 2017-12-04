@@ -97,6 +97,11 @@ class LSLStreamer(threading.Thread):
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
 
+    def get_data(self):
+        """Return copy of data window. Thread safe."""
+        with self.lock:
+            return np.copy(self.data)
+
     def init_data(self):
         """Initialize stored samples to zeros."""
         with self.lock:
@@ -158,6 +163,10 @@ class LSLRecorder(threading.Thread):
     def run(self):
         pass
 
+    def init_data(self):
+        """Initialize data store as empty."""
+        self.data = np.zeros(0, dtype=self.__dtype)
+
     def record(self, length, relative_time=True):
         """Store the next `length` seconds of streamed data.
 
@@ -212,12 +221,13 @@ class LSLRecorder(threading.Thread):
                   for spec in specs}
         return trials
 
-    def init_data(self):
-        """Initialize data store as empty."""
-        self.data = np.zeros(0, dtype=self.__dtype)
-
     def __get_new_data(self):
         self.data = np.concatenate([self.data, self.streamer.new_data], axis=0)
+
+
+def predict(streamer, model):
+    """"""
+
 
 
 def get_lsl_inlet(stream_type='EEG'):

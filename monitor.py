@@ -27,7 +27,7 @@ if __name__ == '__main__':
               'msg': "Please close your eyes and relax."}]
 
     trials = recorder.record_trials(specs)
-    epoched = {label: utils.epoching(data['samples'], 100, samples_overlap=0)
+    epoched = {label: utils.epoching(data['channels'], 100, samples_overlap=0)
                for label, data in trials.items()}
     feature_matrices = {label: utils.calc_feature_matrix(trial[0], sfreq)
                         for label, trial in epoched.items()}
@@ -39,10 +39,10 @@ if __name__ == '__main__':
     streamer.updated.clear()
     while True:
         streamer.updated.wait()
-        with streamer.lock:
-            samples = np.copy(streamer.data['samples'])
-            streamer.updated.clear()
-        epochs, remainder = utils.epoching(samples, streamer.n_samples)
+        data = streamer.get_data()
+        streamer.updated.clear()
+        epochs, remainder = utils.epoching(data['channels'],
+                                           streamer.n_samples)
         feature_matrix = utils.calc_feature_matrix(epochs, sfreq)
         x = (feature_matrix - mu_ft) / std_ft
         y_hat = classifier.predict(x)
