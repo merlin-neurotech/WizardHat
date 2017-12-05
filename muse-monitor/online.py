@@ -187,38 +187,37 @@ class LSLRecorder(threading.Thread):
         if relative_time:
             self.data['time'] -= self.data['time'][0]
 
-    def record_trial(self, spec, **kwargs):
+    def record_trial(self, length, msg=None, **kwargs):
         """Call `record` preceded by a message and a prompt.
 
         Args:
-            spec (dict): Specification for trial.
-               Contains the message and recording length.
+            length (float): Length to record (seconds).
+            msg (str): Message to print before trial start prompt.
             **kwargs: Keyword arguments to `record`.
 
         Returns:
             Instance's stored data upon completion of recording.
         """
-        if 'msg' in spec:
-            print(spec['msg'])
+        if msg is not None:
+            print(msg)
         print('Press Enter when ready to start recording.')
         input()
-        self.record(spec['length'], **kwargs)
+        self.record(length, **kwargs)
         return self.data
 
-    def record_trials(self, specs, **kwargs):
+    def record_trials(self, lengths, messages, **kwargs):
         """Record multiple trials with `record_trial`.
 
         Args:
-            specs (List[dict]): List of trial specifications.
+            lengths (List[float]): Lengths of trial recordings (seconds).
+            messages (List[str]): Messages to print before trial start prompts.
             **kwargs: Keyword arguments to `record_trial`.
 
         Returns:
-            A `dict` with keys as `'label'` values from individual trial
-            specification dictionaries, and values as `numpy.ndarrays`
-            for the corresponding recordings.
+            List[numpy.ndarray]: Recorded data for each trial.
         """
-        trials = {spec['label']: self.record_trial(spec, **kwargs)
-                  for spec in specs}
+        trials = [self.record_trial(length, message, **kwargs)
+                  for length, message in zip(lengths, messages)]
         return trials
 
     def __get_new_data(self):
