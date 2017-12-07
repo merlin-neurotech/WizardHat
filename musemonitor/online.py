@@ -69,12 +69,12 @@ class LSLStreamer(threading.Thread):
         # data type and initialization
         channels_dtype = np.dtype({'names': get_ch_names(info),
                                   'formats': ['f8'] * self.n_chan})
-        self.__dtype = np.dtype([('time', 'f8'), ('channels', channels_dtype)])
+        self._dtype = np.dtype([('time', 'f8'), ('channels', channels_dtype)])
         self.init_data()
-        self.new_data = np.zeros(0, dtype=self.__dtype)
+        self.new_data = np.zeros(0, dtype=self._dtype)
 
         # function aliases
-        self.__pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
+        self._pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
                                                      max_samples=chunk_samples)
 
         if autostart:
@@ -84,14 +84,14 @@ class LSLStreamer(threading.Thread):
         """Streaming thread. Overrides `threading.Thread.run`."""
         try:
             while self.proceed:
-                samples, timestamps = self.__pull_chunk()
+                samples, timestamps = self._pull_chunk()
                 if timestamps:
                     if self.dejitter:
-                        timestamps = self.__dejitter_timestamps(timestamps)
-                    new_data = self.__format_data_array(timestamps, samples)
+                        timestamps = self._dejitter_timestamps(timestamps)
+                    new_data = self._format_data_array(timestamps, samples)
                     with self.lock:
                         self.new_data = new_data
-                        self.__update_data()
+                        self._update_data()
                     self.updated.set()
 
         except SerialException:
@@ -105,23 +105,23 @@ class LSLStreamer(threading.Thread):
     def init_data(self):
         """Initialize stored samples to zeros."""
         with self.lock:
-            self.data = np.zeros((self.n_samples,), dtype=self.__dtype)
+            self.data = np.zeros((self.n_samples,), dtype=self._dtype)
             self.data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
 
-    def __dejitter_timestamps(self, timestamps):
+    def _dejitter_timestamps(self, timestamps):
         """Partial function for more concise call during loop."""
         dejittered = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq,
                                                last_time=self.data['time'][-1])
         return dejittered
 
-    def __format_data_array(self, timestamps, samples):
+    def _format_data_array(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         samples_tuples = [tuple(sample) for sample in samples]
         data_array = np.array(list(zip(timestamps, samples_tuples)),
-                            dtype=self.__dtype)
+                            dtype=self._dtype)
         return data_array
 
-    def __update_data(self):
+    def _update_data(self):
         """Append most recent chunk to stored data and retain window size."""
         self.data = np.concatenate([self.data, self.new_data], axis=0)
         self.data = self.data[-self.n_samples:]
@@ -156,7 +156,7 @@ class LSLRecorder(threading.Thread):
         """
         threading.Thread.__init__(self)
         self.streamer = lsl_streamer
-        self.__dtype = self.streamer.data.dtype  # lock?
+        self._dtype = self.streamer.data.dtype  # lock?
 
         self.init_data()
 
@@ -165,7 +165,7 @@ class LSLRecorder(threading.Thread):
 
     def init_data(self):
         """Initialize data store as empty."""
-        self.data = np.zeros(0, dtype=self.__dtype)
+        self.data = np.zeros(0, dtype=self._dtype)
 
     def record(self, length, relative_time=True):
         """Store the next `length` seconds of streamed data.
@@ -181,7 +181,7 @@ class LSLRecorder(threading.Thread):
         while self.data.shape[0] < n_samples:
             self.streamer.updated.wait()
             with self.streamer.lock:
-                self.__get_new_data()
+                self._get_new_data()
                 self.streamer.updated.clear()
         self.data = self.data[-n_samples:]
         if relative_time:
@@ -220,7 +220,7 @@ class LSLRecorder(threading.Thread):
                   for length, message in zip(lengths, messages)]
         return trials
 
-    def __get_new_data(self):
+    def _get_new_data(self):
         self.data = np.concatenate([self.data, self.streamer.new_data], axis=0)
 
 
