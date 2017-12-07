@@ -3,13 +3,16 @@
 """
 """
 
+import mne
+from mne.preprocessing import ICA
 import numpy as np
 
 
 EEG_BANDS = {
+    "delta": (0, 4),
     "theta": (4, 8),
     "low_alpha": (8, 10),
-    "med_alpha": (9, 11),
+    #"med_alpha": (9, 11),
     "hi_alpha": (10, 12),
     "low_beta": (12, 21),
     "hi_beta": (21, 30),
@@ -45,18 +48,19 @@ def epoching(samples, samples_epoch, samples_overlap=0):
         samples_overlap (int, optional): Samples of overlap between adjacent
             epochs.
     """
-    n_samples, n_chan = samples.shape
+    samples_ = samples.view((samples.dtype[0], len(samples.dtype.names)))
+    n_samples, n_chan = samples_.shape
 
     samples_shift = int(samples_epoch - samples_overlap)
     n_epochs = 1 + int(np.floor((n_samples - samples_epoch) / samples_shift))
     epoched_samples = n_epochs * samples_epoch
 
-    samples_, remainder = np.split(samples, np.array([epoched_samples]))
+    samples_used, remainder = np.split(samples_, np.array([epoched_samples]))
     markers = samples_shift * np.arange(n_epochs + 1)
     epochs = np.zeros((samples_epoch, n_chan, n_epochs))
     for i_epoch in range(n_epochs):
         ind_epoch = slice(markers[i_epoch], markers[i_epoch] + samples_epoch)
-        epochs[:, :, i_epoch] = samples[ind_epoch, :]
+        epochs[:, :, i_epoch] = samples_used[ind_epoch, :]
 
     return epochs, remainder
 
@@ -119,7 +123,7 @@ def psd_band_mean(psd, band, fft_freqs):
     return np.nan_to_num(np.mean(psd[ind, :], axis=1))
 
 
-def feature_matrix(epochs, sfreq):
+def calc_feature_matrix(epochs, sfreq):
     """Calculate the feature matrix from a set of epochs."""
     n_epochs = epochs.shape[2]
     feat = calc_psd_band_means(epochs[:, :, 0], sfreq).T
@@ -129,3 +133,41 @@ def feature_matrix(epochs, sfreq):
         feature_matrix[i_epoch, :] = \
             calc_psd_band_means(epochs[:, :, i_epoch], sfreq).T
     return feature_matrix
+
+
+def samples_threshold(samples, threshold):
+    if np.mean(np.abs(samples)) > threshold:
+        return True
+    else:
+        return False
+
+
+class ICACleanup():
+    def __init__(self, sfreq, ch_names, channel_types=None, filter_=False,
+                 method='fastica', **kwargs):
+        if channel_types is None:
+            channel_types = ['eeg'] * len(ch_names)
+        self.info = mne.create_info(ch_names, sfreq, channel_types)
+        self.montage = mne.channels.read_montage('standard_1020',
+                                                 ch_names=ch_names)
+        self.ica = ICA(n_components=len(ch_names), method=method, **kwargs)
+        self.picks = mne.pick_types(self.info, meg=False, eeg=True, eog=False)
+        self.filter_ = filter_
+
+    def remove_artifacts(self, samples, n_exclude=1, scaling=1E6):
+        samples /= scaling
+        samples_raw = mne.io.RawArray(samples.T, self.info);
+        samples_raw.set_montage(self.montage)
+        if self.filter_:
+            samples_raw.filter(1., 100.)
+        self.ica.fit(samples_raw, picks=self.picks);
+        data_cleaned = self.ica.apply(samples_raw,
+                                      exclude=list(range(n_exclude)))
+        samples_cleaned, _ = data_cleaned[:]
+        samples_cleaned *= scaling
+        self.samples_raw = samples_raw
+        return samples_cleaned
+
+    @classmethod
+    def from_lsl_streamer(cls, streamer, **kwargs):
+        return cls(sfreq=streamer.sfreq, ch_names=streamer.ch_names, **kwargs)
