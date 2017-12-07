@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-"""
+"""Binary SVM classifier of concentrating vs. relaxating states from EEG data."""
 
-import classify
-import online
-import utils
+from musemonitor import classify, online, utils
 
-import numpy as np
+
+channels = ['TP9', 'AF7', 'AF8', 'TP10']
+
 
 # trial parameters
-lengths = [30, 30]  # seconds
+lengths = [5, 5]  # seconds
 labels = [0, 1]
 messages = ["Please focus visually and concentrate.",
             "Please close your eyes and relax."]
@@ -31,24 +30,30 @@ if __name__ == '__main__':
     print(welcome)
 
     # record trials
-    trials = recorder.record_trials(specs)
+    trials = recorder.record_trials(lengths, messages)
 
     # calculate epochs and features (EEG band means) for each trial
     epoched = [utils.epoching(data['channels'], epoch_size) for data in trials]
     feature_matrices = [utils.calc_feature_matrix(trial[0], sfreq)
                         for trial in epoched]
 
-    classifier, mu_ft, std_ft = classify.train_binary_svm(feature_matrices)
+    classifier, mu_ft, std_ft = classify.train_binary_svm(feature_matrices,
+                                                          labels)
 
     print("Press Enter to begin online classification.")
     input()
-    streamer.updated.clear()
+    streamer.proceed = False
+    streamer.join()
+
+    streamer2 = online.LSLStreamer(inlet=streamer.inlet, window=1)
+
+    streamer2.updated.clear()
     while True:
-        streamer.updated.wait()
-        data = streamer.get_data()
-        streamer.updated.clear()
+        streamer2.updated.wait()
+        data = streamer2.get_data()
+        streamer2.updated.clear()
         epochs, remainder = utils.epoching(data['channels'],
-                                           streamer.n_samples)
+                                           streamer2.n_samples)
         feature_matrix = utils.calc_feature_matrix(epochs, sfreq)
         x = (feature_matrix - mu_ft) / std_ft
         y_hat = classifier.predict(x)

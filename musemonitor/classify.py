@@ -6,7 +6,7 @@ import numpy as np
 from sklearn import svm
 
 
-def train_binary_svm(feature_matrices):
+def train_binary_svm(feature_matrices, labels):
     if len(feature_matrices) != 2:
         e_msg = "Binary classification requires exactly two feature matrices."
         raise(ValueError(e_msg))
@@ -17,8 +17,8 @@ def train_binary_svm(feature_matrices):
         e_msg = """Feature matrices must be passed as values
                of a `dict` with class labels as keys."""
         raise(ValueError(e_msg))
-    y = np.ravel(np.concatenate([*classes], axis=0))
-    features_all = np.concatenate([*feature_matrices], axis=0)
+    y = np.ravel(np.concatenate(classes, axis=0))
+    features_all = np.concatenate(feature_matrices, axis=0)
 
     mu_ft = np.mean(features_all, axis=0)
     std_ft = np.std(features_all, axis=0)

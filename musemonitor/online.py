@@ -4,7 +4,7 @@
 Management of data streams or other online processes.
 """
 
-import utils
+from musemonitor import utils
 
 from serial.serialutil import SerialException
 import threading
@@ -51,7 +51,7 @@ class LSLStreamer(threading.Thread):
         """
         threading.Thread.__init__(self)
         if inlet is None:
-            inlet = self.get_lsl_inlet()
+            inlet = get_lsl_inlet()
         self.inlet = inlet
         self.dejitter = dejitter
 
