@@ -52,10 +52,9 @@ class LSLOutletStreamer():
             device_params = MUSE_PARAMS
         if stream_params is None:
             stream_params = MUSE_STREAM_PARAMS
-        if address is None:
-            address = self._get_device_address(stream_params["name"])
 
         self.device_params = device_params
+        self.stream_params = stream_params
         self.chunk_size = chunk_size
         self.interface = interface
         self.address = address
@@ -83,6 +82,8 @@ class LSLOutletStreamer():
 
     def connect(self):
         self.adapter.start()
+        if self.address is None:
+            self.address = self._get_device_address(self.stream_params["name"])
         try:
             self.device = self.adapter.connect(self.address)
         except pygatt.exceptions.NotConnectedError:
@@ -91,7 +92,7 @@ class LSLOutletStreamer():
             raise(IOError(e_msg))
 
         for uuid in self.device_params["ch_uuids"]:
-            self.device.subscribe(uuid, callback=self._transmit_sample)
+            self.device.subscribe(uuid, callback=self._transmit_packet)
 
     def start(self):
         self.sample_index = 0
@@ -101,7 +102,7 @@ class LSLOutletStreamer():
         self._init_sample()
 
         ble_params = self.device_params["ble"]
-        self.device.char_write_handle(handle=ble_params["handle"],
+        self.device.char_write_handle(ble_params["handle"],
                                       value=ble_params["stream_on"],
                                       wait_for_response=False)
 
@@ -118,7 +119,7 @@ class LSLOutletStreamer():
     def _get_device_address(self, name):
         list_devices = self.adapter.scan(timeout=10.5)
         for device in list_devices:
-            if device['name'] == name:
+            if name in device['name']:
                 return device['address']
         raise(ValueError("No devices found with name `{}`".format(name)))
 
@@ -139,7 +140,7 @@ class LSLOutletStreamer():
         dtypes = self.device_params["packet_dtypes"]
         n_chan = self.info.channel_count()
         self.packet_format = dtypes["index"] + \
-                             (',' + dtypes["ch_value"]) * n_chan
+                             (',' + dtypes["ch_value"]) * self.chunk_size
 
     def _transmit_packet(self, handle, data):
         """TODO: Move bit locations to Muse parameters."""
