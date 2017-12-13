@@ -4,6 +4,5 @@ mne==0.15.2
 numpy==1.13.3
 pygatt==3.2.0
 pylsl==1.10.5
-python-dateutil==2.6.1
 scikit-learn==0.19.1
 scipy==1.0.0
