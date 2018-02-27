@@ -13,6 +13,99 @@ import numpy as np
 import pylsl as lsl
 
 
+class Data(threading.Thread):
+
+    def __init__(self, metadata=None):
+        self.metadata = metadata
+        self.init()
+
+        # thread control
+        self.updated = threading.Event()
+        self._lock = threading.Lock()
+
+    def get(self):
+        """Return copy of data window. Thread safe."""
+        try:
+            with self._lock:
+                return np.copy(self._data)
+        except AttributeError:
+            raise NotImplementedError()
+
+    def init(self):
+        raise NotImplementedError()
+
+    def update(self):
+        raise NotImplementedError()
+
+
+class TimeSeries(Data):
+    """
+    Attributes:
+        window (float): Number of seconds of most recent data to store.
+            Approximate, due to floor conversion to number of samples.
+    """
+
+    def __init__(self, ch_names, sfreq, window=10, record=True, metadata=None,
+                 filename=None):
+        Data.__init__(self, metadata)
+        channels_dtype = np.dtype({'names': ch_names,
+                                   'formats': ['f8'] * len(ch_names)})
+        self._dtype = np.dtype([('time', 'f8'), ('channels', channels_dtype)])
+
+        self.n_samples = int(window * self.sfreq)
+        self._count = 0
+
+        self.new = np.zeros(0, dtype=self._dtype)
+
+        if filename is None:
+            # TODO: mkdir if not exist
+            filename = './data/data_{}.csv'.format(0) # TODO: increment
+
+        self._file = file(filename, 'a')
+
+    def init(self):
+        """Initialize stored samples to zeros."""
+        with self._lock:
+            self._data = np.zeros((self.n_samples,), dtype=self._dtype)
+            self._data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
+
+    def update(self, timestamps, samples):
+        """Append most recent chunk to stored data and retain window size."""
+        new = self._format_data(timestamps, samples)
+        with self._lock:
+            self._data = np.concatenate([self.data, new], axis=0)
+            self._data = self.data[-self.n_samples:]  # TODO: remainder
+            self.updated.set()
+            self.count += len(new)
+            if self.count > self.n_samples:
+                self._write_to_file()
+                self.count = 0  # TODO: remainder
+
+    def _write_to_file(self):
+        np.savetxt(self._file, self._data)
+
+    def format_data_array(self, timestamps, samples):
+        """Format data `numpy.ndarray` from timestamps and samples."""
+        samples_tuples = [tuple(sample) for sample in samples]
+        data_array = np.array(list(zip(timestamps, samples_tuples)),
+                              dtype=self._dtype)
+        return data_array
+
+    @property
+    def ch_names(self):
+        """Names of channels."""
+        return self._data.dtype['channels'].names
+
+    @property
+    def window(self):
+        """Actual number of seconds stored.
+
+        Not necessarily the same as the requested window size due to flooring
+        to the nearest sample.
+        """
+        return self.n_samples / self.sfreq
+
+
 class LSLStreamer(threading.Thread):
     """Stores most recent samples pulled from an LSL inlet.
 
@@ -36,15 +129,13 @@ class LSLStreamer(threading.Thread):
         Exclude channels by name.
     """
 
-    def __init__(self, inlet=None, window=5, dejitter=True, chunk_samples=12,
-                 autostart=True):
+    def __init__(self, inlet=None, data=None, dejitter=True,
+                 chunk_samples=12, autostart=True):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
             inlet (pylsl.StreamInlet): The LSL inlet from which to pull chunks.
                 Defaults to call to `get_lsl_inlet`.
-            window (float): Number of seconds of most recent data to store.
-                Approximate, due to floor conversion to number of samples.
             dejitter (bool): Whether to regularize inter-sample intervals.
             chunk_samples (int): Maximum number of samples per chunk pulled.
             autostart (bool): Whether to start streaming on instantiation.
@@ -58,20 +149,17 @@ class LSLStreamer(threading.Thread):
         # inlet parameters
         info = inlet.info()
         self.sfreq = info.nominal_srate()
-        self.n_samples = int(window * self.sfreq)
         self.n_chan = info.channel_count()
+        self.ch_names = get_ch_names(info)
 
-        # thread control
-        self.updated = threading.Event()
-        self.lock = threading.Lock()
+        # data class
+        if data is None:
+            self.data = TimeSeries(self.ch_names, self.sfreq, metadata=None)
+        else:
+            self.data = data
+
+        # manual thread switch
         self.proceed = True
-
-        # data type and initialization
-        channels_dtype = np.dtype({'names': get_ch_names(info),
-                                  'formats': ['f8'] * self.n_chan})
-        self._dtype = np.dtype([('time', 'f8'), ('channels', channels_dtype)])
-        self.init_data()
-        self.new_data = np.zeros(0, dtype=self._dtype)
 
         # function aliases
         self._pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
@@ -88,145 +176,17 @@ class LSLStreamer(threading.Thread):
                 if timestamps:
                     if self.dejitter:
                         timestamps = self._dejitter_timestamps(timestamps)
-                    new_data = self._format_data_array(timestamps, samples)
-                    with self.lock:
-                        self.new_data = new_data
-                        self._update_data()
-                    self.updated.set()
+                    self.data.update(timestamps, samples)
 
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
 
-    def get_data(self):
-        """Return copy of data window. Thread safe."""
-        with self.lock:
-            return np.copy(self.data)
-
-    def init_data(self):
-        """Initialize stored samples to zeros."""
-        with self.lock:
-            self.data = np.zeros((self.n_samples,), dtype=self._dtype)
-            self.data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
 
     def _dejitter_timestamps(self, timestamps):
         """Partial function for more concise call during loop."""
         dejittered = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq,
                                                last_time=self.data['time'][-1])
         return dejittered
-
-    def _format_data_array(self, timestamps, samples):
-        """Format data `numpy.ndarray` from timestamps and samples."""
-        samples_tuples = [tuple(sample) for sample in samples]
-        data_array = np.array(list(zip(timestamps, samples_tuples)),
-                            dtype=self._dtype)
-        return data_array
-
-    def _update_data(self):
-        """Append most recent chunk to stored data and retain window size."""
-        self.data = np.concatenate([self.data, self.new_data], axis=0)
-        self.data = self.data[-self.n_samples:]
-
-    @property
-    def ch_names(self):
-        """Names of channels from associated LSL inlet."""
-        return self.data.dtype['channels'].names
-
-    @property
-    def window(self):
-        """Actual number of seconds stored.
-
-        Not necessarily the same as the requested window size due to flooring
-        to the nearest sample.
-        """
-        return self.n_samples / self.sfreq
-
-
-class LSLRecorder(threading.Thread):
-    """Make recordings of arbitrary length from a given `LSLStreamer`.
-
-    Attributes:
-        streamer (LSLStreamer): Associated LSL data streamer.
-    """
-
-    def __init__(self, lsl_streamer):
-        """Initialize given an `LSLStreamer` instance.
-
-        Args:
-            lsl_streamer (LSLStreamer): LSL data streamer from which to record.
-        """
-        threading.Thread.__init__(self)
-        self.streamer = lsl_streamer
-        self._dtype = self.streamer.data.dtype  # lock?
-
-        self.init_data()
-
-    def run(self):
-        pass
-
-    def init_data(self):
-        """Initialize data store as empty."""
-        self.data = np.zeros(0, dtype=self._dtype)
-
-    def record(self, length, relative_time=True):
-        """Store the next `length` seconds of streamed data.
-
-        Args:
-            length (float): Number of seconds of data to store.
-            relative_time (bool): Whether to set sample times relative to
-                start of recording.
-        """
-        n_samples = int(length * self.streamer.sfreq)
-        self.init_data()
-        self.streamer.updated.clear()  # skip chunk pulled before
-        while self.data.shape[0] < n_samples:
-            self.streamer.updated.wait()
-            with self.streamer.lock:
-                self._get_new_data()
-                self.streamer.updated.clear()
-        self.data = self.data[-n_samples:]
-        if relative_time:
-            self.data['time'] -= self.data['time'][0]
-
-    def record_trial(self, length, msg=None, **kwargs):
-        """Call `record` preceded by a message and a prompt.
-
-        Args:
-            length (float): Length to record (seconds).
-            msg (str): Message to print before trial start prompt.
-            **kwargs: Keyword arguments to `record`.
-
-        Returns:
-            Instance's stored data upon completion of recording.
-        """
-        if msg is not None:
-            print(msg)
-        print('Press Enter when ready to start recording.')
-        input()
-        self.record(length, **kwargs)
-        return self.data
-
-    def record_trials(self, lengths, messages, **kwargs):
-        """Record multiple trials with `record_trial`.
-
-        Args:
-            lengths (List[float]): Lengths of trial recordings (seconds).
-            messages (List[str]): Messages to print before trial start prompts.
-            **kwargs: Keyword arguments to `record_trial`.
-
-        Returns:
-            List[numpy.ndarray]: Recorded data for each trial.
-        """
-        trials = [self.record_trial(length, message, **kwargs)
-                  for length, message in zip(lengths, messages)]
-        return trials
-
-    def _get_new_data(self):
-        self.data = np.concatenate([self.data, self.streamer.new_data], axis=0)
-
-
-def predict(streamer, model):
-    """"""
-
 
 
 def get_lsl_inlet(stream_type='EEG'):
