@@ -6,6 +6,8 @@ Management of data streams or other online processes.
 
 from musemonitor import utils
 
+import datetime
+import os
 from serial.serialutil import SerialException
 import threading
 
@@ -13,28 +15,38 @@ import numpy as np
 import pylsl as lsl
 
 
-class Data(threading.Thread):
+class Data:
+    """Parent of data management classes.
+    
+    Attributes:
+        metadata (dict): 
+    """
 
-    def __init__(self, metadata=None):
+    def __init__(self, metadata=None):     
+        
+        self.initialize()
+        
         self.metadata = metadata
-        self.init()
 
         # thread control
         self.updated = threading.Event()
         self._lock = threading.Lock()
 
-    def get(self):
-        """Return copy of data window. Thread safe."""
+    @property
+    def data(self):
+        """Return copy of data window."""
         try:
             with self._lock:
                 return np.copy(self._data)
         except AttributeError:
             raise NotImplementedError()
 
-    def init(self):
+    def initialize(self):
+        """Initialize data window."""
         raise NotImplementedError()
 
     def update(self):
+        """Update data."""
         raise NotImplementedError()
 
 
@@ -46,45 +58,66 @@ class TimeSeries(Data):
     """
 
     def __init__(self, ch_names, sfreq, window=10, record=True, metadata=None,
-                 filename=None):
+                 filename=None, data_dir='data', label=None):
         Data.__init__(self, metadata)
         channels_dtype = np.dtype({'names': ch_names,
                                    'formats': ['f8'] * len(ch_names)})
         self._dtype = np.dtype([('time', 'f8'), ('channels', channels_dtype)])
 
+        self.sfreq = sfreq
+        self.window = window
         self.n_samples = int(window * self.sfreq)
-        self._count = 0
+        self._count = self.n_samples
+        if record:
+            if filename is None:
+                date = datetime.date.today().isoformat()
+                filename = './{}/timeseries_{}_{{}}.csv'.format(data_dir, date)
+                if label is None:
+                    # use next available integer label
+                    label = 0
+                    while os.path.exists(filename.format(label)):
+                        label += 1
+                filename = filename.format(label)
 
-        self.new = np.zeros(0, dtype=self._dtype)
+            # make sure data directory exists
+            os.makedirs(filename[:filename.rindex(os.path.sep)], exist_ok=True)
 
-        if filename is None:
-            # TODO: mkdir if not exist
-            filename = './data/data_{}.csv'.format(0) # TODO: increment
+            self._file = open(filename, 'a')
+            
 
-        self._file = file(filename, 'a')
-
-    def init(self):
+    def initialize(self):
         """Initialize stored samples to zeros."""
         with self._lock:
             self._data = np.zeros((self.n_samples,), dtype=self._dtype)
-            self._data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
+            # self._data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
 
     def update(self, timestamps, samples):
         """Append most recent chunk to stored data and retain window size."""
-        new = self._format_data(timestamps, samples)
+        
+        new = self._format_samples(timestamps, samples)
+        
+        self._count -= len(new)
+        
+        # 
+        cutoff = len(new) + self._count
+        self._append(new[:cutoff])
+        if self._count < 1:
+            self._write_to_file()
+            self._count = self.n_samples
+        self._append(new[cutoff:])
+        
+        self.updated.set()
+        
+    def _append(self, new):
         with self._lock:
-            self._data = np.concatenate([self.data, new], axis=0)
-            self._data = self.data[-self.n_samples:]  # TODO: remainder
-            self.updated.set()
-            self.count += len(new)
-            if self.count > self.n_samples:
-                self._write_to_file()
-                self.count = 0  # TODO: remainder
-
+            self._data = np.concatenate([self._data, new], axis=0)
+            self._data = self.data[-self.n_samples:]
+        
     def _write_to_file(self):
-        np.savetxt(self._file, self._data)
+        with self._lock:
+            np.savetxt(self._file, self._data)
 
-    def format_data_array(self, timestamps, samples):
+    def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         samples_tuples = [tuple(sample) for sample in samples]
         data_array = np.array(list(zip(timestamps, samples_tuples)),
