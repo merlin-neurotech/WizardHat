@@ -34,14 +34,9 @@ class Data:
     """
 
     def __init__(self, metadata=None):
-
-        self.initialize()
-
-        self.metadata = metadata
-
-        # thread control
-        self.updated = threading.Event()
         self._lock = threading.Lock()
+        self.updated = threading.Event()
+        self.metadata = metadata
 
     @property
     def data(self):
@@ -74,10 +69,9 @@ class TimeSeries(Data):
         names = ["time"] + ch_names
         self.dtype = np.dtype({'names': names,
                                'formats': ['f8'] * (1 + len(ch_names))})
-
         self.sfreq = sfreq
-        self.window = window
         self.n_samples = int(window * self.sfreq)
+        self.initialize()
 
         if record:
             if filename is None:
@@ -104,7 +98,6 @@ class TimeSeries(Data):
 
     def update(self, timestamps, samples):
         """Append most recent chunk to stored data and retain window size."""
-
         new = self._format_samples(timestamps, samples)
 
         self._count -= len(new)
