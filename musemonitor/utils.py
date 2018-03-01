@@ -63,7 +63,7 @@ class TimeSeries(Data):
             Approximate, due to floor conversion to number of samples.
     """
 
-    def __init__(self, ch_names, sfreq, window=10, record=True, metadata=None,
+    def __init__(self, ch_names, sfreq, window=10, record=False, metadata=None,
                  filename=None, data_dir='data', label=None):
         Data.__init__(self, metadata)
         names = ["time"] + ch_names
@@ -99,10 +99,10 @@ class TimeSeries(Data):
     def update(self, timestamps, samples):
         """Append most recent chunk to stored data and retain window size."""
         new = self._format_samples(timestamps, samples)
+        
 
         self._count -= len(new)
 
-        #
         cutoff = len(new) + self._count
         self._append(new[:cutoff])
         if self._count < 1:
@@ -115,7 +115,10 @@ class TimeSeries(Data):
     def _append(self, new):
         with self._lock:
             self._data = np.concatenate([self._data, new], axis=0)
-            self._data = self.data[-self.n_samples:]
+            self._data = self._data[-self.n_samples:]
+            print(self._data)
+            
+            
 
     def _write_to_file(self):
         with self._lock:
