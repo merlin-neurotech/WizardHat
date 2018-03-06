@@ -8,4 +8,4 @@ import gatt2lsl
 if __name__ == '__main__':
     outlet_streamer = gatt2lsl.LSLOutletStreamer()
 
-    streamer = online.LSLStreamer()
+    streamer = online.LSLStreamer(dejitter=False)

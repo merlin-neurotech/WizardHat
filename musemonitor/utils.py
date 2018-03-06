@@ -72,8 +72,9 @@ class TimeSeries(Data):
         self.sfreq = sfreq
         self.n_samples = int(window * self.sfreq)
         self.initialize()
+        self.record = record
 
-        if record:
+        if self.record:
             if filename is None:
                 date = datetime.date.today().isoformat()
                 filename = './{}/timeseries_{}_{{}}.csv'.format(data_dir, date)
@@ -106,7 +107,8 @@ class TimeSeries(Data):
         cutoff = len(new) + self._count
         self._append(new[:cutoff])
         if self._count < 1:
-            self._write_to_file()
+            if self.record:
+                self._write_to_file()
             self._append(new[cutoff:])
             self._count = self.n_samples
 
@@ -119,7 +121,6 @@ class TimeSeries(Data):
             print(self._data)
             
             
-
     def _write_to_file(self):
         with self._lock:
             for observation in self._data:
