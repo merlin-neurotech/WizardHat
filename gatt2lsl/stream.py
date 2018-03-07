@@ -188,3 +188,86 @@ class LSLOutletStreamer():
     def _push_chunk(self, channels, timestamps):
         for sample in range(self.chunk_size):
             self.outlet.push_sample(channels[:, sample], timestamps[sample])
+
+
+class LSLOutletDummy():
+    def __init__(self, csv_file=None, dur=60, device_params=None, stream_params=None, 
+                 autostart=True,chunk_size=12, time_func=time.time):
+        if device_params is None:
+            device_params = MUSE_PARAMS
+        if stream_params is None:
+            stream_params = MUSE_STREAM_PARAMS
+
+        self.device_params = device_params
+        self.stream_params = stream_params
+        self.chunk_size = chunk_size
+        self.time_func = time_func
+        self.csv_file = csv_file
+
+        # construct LSL StreamInfo and StreamOutlet
+        self._init_stream_info(stream_params)
+        self.outlet = lsl.StreamOutlet(self.info, chunk_size=chunk_size,
+                                       max_buffered=360)
+
+        # generate or load fake data
+        if csv_file is None:
+            self.fake_data = self.gen_fake_data(dur)
+            
+        else:
+            # TODO:load csv file to np array
+            # get params from somewhere? MUSE_STREAM_PARAMS for now
+            pass
+    
+        if autostart:
+            self.start()
+
+    def start(self):
+        self.start_time = self.time_func()
+        chunk_inds = np.arange(0, len(self.fake_data.T), self.chunk_size)
+        for chunk_ind in chunk_inds:
+            self.make_chunk(chunk_ind)
+            #self._push_chunk(self.data, self.timestamps)
+
+    def _init_stream_info(self, stream_params):
+        self.info = lsl.StreamInfo(**stream_params, source_id="MuseNone")
+
+        self.info.desc().append_child_value("manufacturer",
+                                            self.device_params["manufacturer"])
+
+        self.channels = self.info.desc().append_child("channels")
+        for ch_name in self.device_params["ch_names"]:
+            self.channels.append_child("channel") \
+                .append_child_value("label", ch_name) \
+                .append_child_value("unit", self.device_params["units"]) \
+                .append_child_value("type", stream_params["type"])
+    
+    def _init_sample(self):
+        self.timestamps = np.zeros(self.info.channel_count())
+        self.data = np.zeros((self.info.channel_count(), self.chunk_size))
+
+    def _push_chunk(self, channels, timestamps):
+        for sample in range(self.chunk_size):
+            self.outlet.push_sample(channels[:, sample], timestamps[sample])
+
+    def gen_fake_data(self, dur, freqs=[5, 10, 12, 20]):
+        srate = self.stream_params['nominal_srate']
+        n_fake_samples = dur*srate
+        n_chan = self.stream_params['channel_count']
+        x = np.arange(0, n_fake_samples)
+        a_freqs = 2*np.pi*np.array(freqs)
+        y = np.zeros((n_chan, len(x)))
+
+        # sum frequencies with random amplitudes
+        for freq in a_freqs:
+            y += np.random.randint(1,5)*np.sin(freq*x)
+
+        noise = np.random.normal(0, 1, (n_chan, n_fake_samples))
+        fake_data = y + noise
+
+        return fake_data
+
+    def make_chunk(self, chunk_ind):
+        self.data = self.fake_data[:,chunk_ind:chunk_ind+self.chunk_size]
+        # TODO: more realistic timestamps
+        timestamp = self.time_func()
+        self.timestamps = np.array([timestamp]*self.info.channel_count())
