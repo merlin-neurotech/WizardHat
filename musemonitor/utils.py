@@ -100,7 +100,7 @@ class TimeSeries(Data):
     def update(self, timestamps, samples):
         """Append most recent chunk to stored data and retain window size."""
         new = self._format_samples(timestamps, samples)
-        
+
 
         self._count -= len(new)
 
@@ -119,8 +119,8 @@ class TimeSeries(Data):
             self._data = np.concatenate([self._data, new], axis=0)
             self._data = self._data[-self.n_samples:]
             print(self._data)
-            
-            
+
+
     def _write_to_file(self):
         with self._lock:
             for observation in self._data:
@@ -145,6 +145,12 @@ class TimeSeries(Data):
         to the nearest sample.
         """
         return self.n_samples / self.sfreq
+
+    @property
+    def last(self):
+        """Last sample stored."""
+        with self.lock:
+            return np.copy(self._data[-1])
 
 
 def dejitter_timestamps(timestamps, sfreq, last_time=None):

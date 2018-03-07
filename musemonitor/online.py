@@ -92,7 +92,7 @@ class LSLStreamer(threading.Thread):
     def _dejitter_timestamps(self, timestamps):
         """Partial function for more concise call during loop."""
         dejittered = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq,
-                                               last_time=self.data['time'][-1])
+                                               last_time=self.data.last['time'])
         return dejittered
 
 
