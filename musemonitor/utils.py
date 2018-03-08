@@ -87,7 +87,7 @@ class TimeSeries(Data):
 
             # make sure data directory exists
             os.makedirs(filename[:filename.rindex(os.path.sep)], exist_ok=True)
-
+            self._filename = filename
             self._file = open(filename, 'a')
 
     def initialize(self):
@@ -118,14 +118,18 @@ class TimeSeries(Data):
         with self._lock:
             self._data = np.concatenate([self._data, new], axis=0)
             self._data = self._data[-self.n_samples:]
-            print(self._data)
+            
 
 
     def _write_to_file(self):
         with self._lock:
+            print('Saving File')
+            self._file = open(self._filename, 'a')
             for observation in self._data:
                 line = ','.join(str(n) for n in observation) + '\n'
                 self._file.write(line)
+            self._file.close()
+            print('File Saved')
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
