@@ -55,6 +55,12 @@ class Data:
         """Update data."""
         raise NotImplementedError()
 
+    def _write_to_file(self):
+        with self._lock:
+            for row in self._data:
+                line = ','.join(str(n) for n in row) + '\n'
+                self._file.write(line)
+
 
 class TimeSeries(Data):
     """
@@ -101,7 +107,6 @@ class TimeSeries(Data):
         """Append most recent chunk to stored data and retain window size."""
         new = self._format_samples(timestamps, samples)
 
-
         self._count -= len(new)
 
         cutoff = len(new) + self._count
@@ -118,15 +123,7 @@ class TimeSeries(Data):
         with self._lock:
             self._data = np.concatenate([self._data, new], axis=0)
             self._data = self._data[-self.n_samples:]
-            print(self._data)
-
-
-    def _write_to_file(self):
-        with self._lock:
-            for observation in self._data:
-                line = ','.join(str(n) for n in observation) + '\n'
-                self._file.write(line)
-
+    
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         stacked = [(t,) + tuple(s) for t, s in zip(timestamps, samples)]
@@ -151,6 +148,37 @@ class TimeSeries(Data):
         """Last sample stored."""
         with self.lock:
             return np.copy(self._data[-1])
+
+    @classmethod
+    def clone(cls, time_series):
+        return cls(time_series.ch_names, time_series.sfreq)
+
+
+class Transformer(threading.Thread):
+
+    def __init__(self, input_data):
+        self.input_data = input_data
+
+    def run(self):
+        raise NotImplementedError()
+
+
+class ICADeblink(Transformer):
+
+    def __init__(self, input_data, ica_samples=None, autostart=True):
+        Transformer.__init__(input_data)
+        self._data = TimeSeries.clone(input_data)
+
+        if ica_samples is None:
+            ica_samples = min(1024, input_data.n_samples)
+
+        self.proceed = True
+        if autostart:
+            self.start()
+
+    def run(self):
+        while self.proceed:
+            pass
 
 
 def dejitter_timestamps(timestamps, sfreq, last_time=None):
