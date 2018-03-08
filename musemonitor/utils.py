@@ -146,7 +146,7 @@ class TimeSeries(Data):
     @property
     def last(self):
         """Last sample stored."""
-        with self.lock:
+        with self._lock:
             return np.copy(self._data[-1])
 
     @classmethod
