@@ -6,10 +6,7 @@ from musemonitor import online
 import gatt2lsl
 
 if __name__ == '__main__':
-    #outlet_streamer = gatt2lsl.LSLOutletStreamer()
-
-    outlet_streamer = gatt2lsl.LSLOutletDummy(dur=10)
-
+    outlet_streamer = gatt2lsl.LSLOutletStreamer()
+	#outlet_streamer = gatt2lsl.LSLOutletDummy() #Let's add default arg so people can run either dummy or real without commenting
+	print('Connected')
     streamer = online.LSLStreamer()
-
-    print(streamer.data.data)
