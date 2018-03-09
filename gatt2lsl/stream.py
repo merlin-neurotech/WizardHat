@@ -10,6 +10,7 @@ import bitstring
 import numpy as np
 import pygatt
 import pylsl as lsl
+import threading
 
 
 MUSE_PARAMS = dict(
@@ -190,9 +191,10 @@ class LSLOutletStreamer():
             self.outlet.push_sample(channels[:, sample], timestamps[sample])
 
 
-class LSLOutletDummy():
+class LSLOutletDummy(threading.Thread):
     def __init__(self, csv_file=None, dur=60, device_params=None, stream_params=None, 
                  autostart=True,chunk_size=12, time_func=time.time):
+        threading.Thread.__init__(self)
         if device_params is None:
             device_params = MUSE_PARAMS
         if stream_params is None:
@@ -203,6 +205,9 @@ class LSLOutletDummy():
         self.chunk_size = chunk_size
         self.time_func = time_func
         self.csv_file = csv_file
+
+        self.srate = self.stream_params['nominal_srate']
+        self.n_chan = self.stream_params['channel_count']
 
         # construct LSL StreamInfo and StreamOutlet
         self._init_stream_info(stream_params)
@@ -221,12 +226,20 @@ class LSLOutletDummy():
         if autostart:
             self.start()
 
-    def start(self):
+    def run(self):
         self.start_time = self.time_func()
         chunk_inds = np.arange(0, len(self.fake_data.T), self.chunk_size)
         for chunk_ind in chunk_inds:
             self.make_chunk(chunk_ind)
-            #self._push_chunk(self.data, self.timestamps)
+            self._push_chunk(self.data, self.timestamps)
+            # force sampling rate
+            sec_per_chunk = 1/(self.srate/self.chunk_size)
+            time.sleep(sec_per_chunk)
+        # hacky way to run indefinitely
+        self.rerun()
+    
+    def rerun(self):
+        self.run()
 
     def _init_stream_info(self, stream_params):
         self.info = lsl.StreamInfo(**stream_params, source_id="MuseNone")
@@ -250,18 +263,16 @@ class LSLOutletDummy():
             self.outlet.push_sample(channels[:, sample], timestamps[sample])
 
     def gen_fake_data(self, dur, freqs=[5, 10, 12, 20]):
-        srate = self.stream_params['nominal_srate']
-        n_fake_samples = dur*srate
-        n_chan = self.stream_params['channel_count']
+        n_fake_samples = dur*self.srate
         x = np.arange(0, n_fake_samples)
         a_freqs = 2*np.pi*np.array(freqs)
-        y = np.zeros((n_chan, len(x)))
+        y = np.zeros((self.n_chan, len(x)))
 
         # sum frequencies with random amplitudes
         for freq in a_freqs:
             y += np.random.randint(1,5)*np.sin(freq*x)
 
-        noise = np.random.normal(0, 1, (n_chan, n_fake_samples))
+        noise = np.random.normal(0, 1, (self.n_chan, n_fake_samples))
         fake_data = y + noise
 
         return fake_data
@@ -270,4 +281,4 @@ class LSLOutletDummy():
         self.data = self.fake_data[:,chunk_ind:chunk_ind+self.chunk_size]
         # TODO: more realistic timestamps
         timestamp = self.time_func()
-        self.timestamps = np.array([timestamp]*self.info.channel_count())
+        self.timestamps = np.array([timestamp]*self.chunk_size)

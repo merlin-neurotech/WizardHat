@@ -119,6 +119,8 @@ class TimeSeries(Data):
 
         self.updated.set()
 
+        print(self._data)
+
     def _append(self, new):
         with self._lock:
             self._data = np.concatenate([self._data, new], axis=0)

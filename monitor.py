@@ -8,7 +8,7 @@ import gatt2lsl
 if __name__ == '__main__':
     #outlet_streamer = gatt2lsl.LSLOutletStreamer()
 
-    outlet_streamer = gatt2lsl.LSLOutletDummy()
+    outlet_streamer = gatt2lsl.LSLOutletDummy(dur=10)
 
     streamer = online.LSLStreamer()
 
