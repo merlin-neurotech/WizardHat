@@ -69,17 +69,16 @@ class TimeSeries(Data):
             Approximate, due to floor conversion to number of samples.
     """
 
-    def __init__(self, ch_names, sfreq, window=10, record=False, metadata=None,
+    def __init__(self, ch_names, sfreq, n_samples, record=False, metadata=None,
                  filename=None, data_dir='data', label=None):
         Data.__init__(self, metadata)
-        names = ["time"] + ch_names
-        self.dtype = np.dtype({'names': names,
+
+        self.dtype = np.dtype({'names': ["time"] + ch_names,
                                'formats': ['f8'] * (1 + len(ch_names))})
         self.sfreq = sfreq
-        self.n_samples = int(window * self.sfreq)
         self.initialize()
-        self.record = record
 
+        self.record = record
         if self.record:
             if filename is None:
                 date = datetime.date.today().isoformat()
@@ -93,8 +92,15 @@ class TimeSeries(Data):
 
             # make sure data directory exists
             os.makedirs(filename[:filename.rindex(os.path.sep)], exist_ok=True)
+            self.data_dir = data_dir
             self._filename = filename
             self._file = open(filename, 'a')
+
+    @classmethod
+    def with_window(cls, ch_names, sfreq, window=10, **kwargs):
+        n_samples = int(window * sfreq)
+        return cls(ch_names, sfreq, n_samples, **kwargs)
+
 
     def initialize(self):
         """Initialize stored samples to zeros."""
@@ -119,24 +125,22 @@ class TimeSeries(Data):
 
         self.updated.set()
 
-        print(self._data)
+        #print(self._data)
 
     def _append(self, new):
         with self._lock:
             self._data = np.concatenate([self._data, new], axis=0)
             self._data = self._data[-self.n_samples:]
-            
-
 
     def _write_to_file(self):
         with self._lock:
-            print('Saving File')
+            #print('Saving File')
             self._file = open(self._filename, 'a')
             for observation in self._data:
                 line = ','.join(str(n) for n in observation) + '\n'
                 self._file.write(line)
             self._file.close()
-            print('File Saved')
+            #print('File Saved')
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
@@ -163,10 +167,6 @@ class TimeSeries(Data):
         with self._lock:
             return np.copy(self._data[-1])
 
-    @classmethod
-    def clone(cls, time_series):
-        return cls(time_series.ch_names, time_series.sfreq)
-
 
 class Transformer(threading.Thread):
 
@@ -177,14 +177,52 @@ class Transformer(threading.Thread):
         raise NotImplementedError()
 
 
-class ICADeblink(Transformer):
+class EEGTransformer(Transformer):
 
-    def __init__(self, input_data, ica_samples=None, autostart=True):
+    def __init__(self, input_data, mne_montage='standard_1020', scaling=1E6):
         Transformer.__init__(input_data)
-        self._data = TimeSeries.clone(input_data)
+        channel_types = ['eeg'] * len(input_data.ch_names)
+        self.info = mne.create_info(input_data.ch_names, input_data.sfreq,
+                                    channel_types)
+        self.montage = mne.channels.read_montage(mne_montage,
+                                                 ch_names=input_data.ch_names)
+        self.picks = mne.pick_types(self.info, meg=False, eeg=True,
+                                    eog=False)
+        self.scaling = scaling
 
-        if ica_samples is None:
-            ica_samples = min(1024, input_data.n_samples)
+    def _to_mne_array(self, samples):
+        samples /= self.scaling
+        mne_array = mne.io.RawArray(samples.T, self.info)
+        mne_array.set_montage(self.montage)
+        return mne_array
+
+    def _from_mne_array(self, mne_array):
+        samples, _ = mne_array[:]
+        samples *= self.scaling
+        return samples
+
+
+class ICAClean(EEGTransformer):
+
+    def __init__(self, input_data, ica_samples=1024, method='fastica',
+                 mne_montage='standard_1020', n_exclude=1, filter_=False,
+                 autostart=True, **kwargs):
+        EEGTransformer.__init__(input_data, mne_montage=mne_montage,
+                                scaling=1E6)
+
+        n_samples = max(input_data.n_samples, ica_samples)
+        self.data = TimeSeries(ch_names=input_data.ch_names,
+                               sfreq=input_data.sfreq,
+                               n_samples=n_samples,
+                               record=input_data.record,
+                               metadata=input_data.metadata,
+                               filename=None,
+                               data_dir=input_data.data_dir,
+                               label=None)
+        self.ica = ICA(n_components=len(self.data.ch_names), method=method,
+                       **kwargs)
+        self.filter_ = filter_
+        self.n_exclude = n_exclude
 
         self.proceed = True
         if autostart:
@@ -192,7 +230,17 @@ class ICADeblink(Transformer):
 
     def run(self):
         while self.proceed:
-            pass
+            if True: #TODO: count condition
+                # TODO: exclude 'time': only EEG channels
+                samples_mne = self._to_mne_array(self.input_data.data)
+                if self.filter_:
+                    samples_mne.filter(1.0, 100.0)
+                self.ica_fit(samples_mne, picks=self.picks)
+                excludes = list(range(self.n_exclude))
+                samples_mne_cleaned = self.ica.apply(samples_mne,
+                                                     exclude=excludes)
+                samples_cleaned = self._from_mne_array(samples_mne_cleaned)
+                self.data.update(samples_cleaned)
 
 
 def dejitter_timestamps(timestamps, sfreq, last_time=None):
@@ -313,34 +361,3 @@ def samples_threshold(samples, threshold):
         return True
     else:
         return False
-
-
-class ICACleanup():
-    def __init__(self, sfreq, ch_names, channel_types=None, filter_=False,
-                 method='fastica', **kwargs):
-        if channel_types is None:
-            channel_types = ['eeg'] * len(ch_names)
-        self.info = mne.create_info(ch_names, sfreq, channel_types)
-        self.montage = mne.channels.read_montage('standard_1020',
-                                                 ch_names=ch_names)
-        self.ica = ICA(n_components=len(ch_names), method=method, **kwargs)
-        self.picks = mne.pick_types(self.info, meg=False, eeg=True, eog=False)
-        self.filter_ = filter_
-
-    def remove_artifacts(self, samples, n_exclude=1, scaling=1E6):
-        samples /= scaling
-        samples_raw = mne.io.RawArray(samples.T, self.info);
-        samples_raw.set_montage(self.montage)
-        if self.filter_:
-            samples_raw.filter(1., 100.)
-        self.ica.fit(samples_raw, picks=self.picks);
-        data_cleaned = self.ica.apply(samples_raw,
-                                      exclude=list(range(n_exclude)))
-        samples_cleaned, _ = data_cleaned[:]
-        samples_cleaned *= scaling
-        self.samples_raw = samples_raw
-        return samples_cleaned
-
-    @classmethod
-    def from_lsl_streamer(cls, streamer, **kwargs):
-        return cls(sfreq=streamer.sfreq, ch_names=streamer.ch_names, **kwargs)
