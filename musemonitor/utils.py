@@ -170,30 +170,44 @@ class TimeSeries(Data):
 
 class Transformer(threading.Thread):
 
-    def __init__(self, input_data):
-        self.input_data = input_data
+    def __init__(self, data_in):
+        self.data_in = input_data
 
     def run(self):
         raise NotImplementedError()
 
 
-class EEGTransformer(Transformer):
+class MNETransformer(Transformer):
+    """Parent class for MNE-based data processing.
 
-    def __init__(self, input_data, mne_montage='standard_1020', scaling=1E6):
-        Transformer.__init__(input_data)
-        channel_types = ['eeg'] * len(input_data.ch_names)
-        self.info = mne.create_info(input_data.ch_names, input_data.sfreq,
+    Expects a single data source (e.g. EEG) with consistent units.
+    """
+    def __init__(self, data_in, source_type='eeg', scaling=1E6,
+                 montage='standard_1020'):
+        Transformer.__init__(data_in)
+
+        channel_types = [source_type] * len(data_in.ch_names)
+        self.source_type = source_type
+        self.info = mne.create_info(data_in.ch_names, data_in.sfreq,
                                     channel_types)
-        self.montage = mne.channels.read_montage(mne_montage,
-                                                 ch_names=input_data.ch_names)
-        self.picks = mne.pick_types(self.info, meg=False, eeg=True,
-                                    eog=False)
+
+        if source_type == 'eeg':
+            self.montage = mne.channels.read_montage(montage,
+                                                     ch_names=data_in.ch_names)
+        if not source_type == 'meg':
+            # MNE defaults to `meg=True` and everything else `False`...
+            self.picks = mne.pick_types(self.info, meg=False,
+                                        **{source_type: True})
+        else:
+            self.picks = mne.pick_types(self.info)
+
         self.scaling = scaling
 
     def _to_mne_array(self, samples):
         samples /= self.scaling
         mne_array = mne.io.RawArray(samples.T, self.info)
-        mne_array.set_montage(self.montage)
+        if self.source_type == 'eeg':
+            mne_array.set_montage(self.montage)
         return mne_array
 
     def _from_mne_array(self, mne_array):
@@ -202,22 +216,23 @@ class EEGTransformer(Transformer):
         return samples
 
 
-class ICAClean(EEGTransformer):
+class ICAClean(MNETransformer):
 
-    def __init__(self, input_data, ica_samples=1024, method='fastica',
-                 mne_montage='standard_1020', n_exclude=1, filter_=False,
-                 autostart=True, **kwargs):
-        EEGTransformer.__init__(input_data, mne_montage=mne_montage,
-                                scaling=1E6)
+    def __init__(self, data_in, ica_samples=1024, method='fastica',
+                 n_exclude=1, filter_=False, autostart=True,
+                 montage='standard_1020', **kwargs):
+        MNETransformer.__init__(data_in, montage=montage)
 
-        n_samples = max(input_data.n_samples, ica_samples)
-        self.data = TimeSeries(ch_names=input_data.ch_names,
-                               sfreq=input_data.sfreq,
+        n_samples = max(data_in.n_samples, ica_samples)
+
+        # TODO: better Data object copying?
+        self.data = TimeSeries(ch_names=data_in.ch_names,
+                               sfreq=data_in.sfreq,
                                n_samples=n_samples,
-                               record=input_data.record,
-                               metadata=input_data.metadata,
+                               record=data_in.record,
+                               metadata=data_in.metadata,
                                filename=None,
-                               data_dir=input_data.data_dir,
+                               data_dir=data_in.data_dir,
                                label=None)
         self.ica = ICA(n_components=len(self.data.ch_names), method=method,
                        **kwargs)
@@ -229,17 +244,19 @@ class ICAClean(EEGTransformer):
             self.start()
 
     def run(self):
+        excludes = list(range(self.n_exclude))
         while self.proceed:
             if True: #TODO: count condition
                 # TODO: exclude 'time': only EEG channels
-                samples_mne = self._to_mne_array(self.input_data.data)
+                samples_mne = self._to_mne_array(self.data_in.data)
                 if self.filter_:
                     samples_mne.filter(1.0, 100.0)
                 self.ica_fit(samples_mne, picks=self.picks)
-                excludes = list(range(self.n_exclude))
+
                 samples_mne_cleaned = self.ica.apply(samples_mne,
                                                      exclude=excludes)
                 samples_cleaned = self._from_mne_array(samples_mne_cleaned)
+
                 self.data.update(samples_cleaned)
 
 
