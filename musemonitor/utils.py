@@ -3,6 +3,7 @@
 """
 """
 
+import copy
 import datetime
 import json
 import os
@@ -36,28 +37,29 @@ class Data:
 
     def __init__(self, record=False, metadata=None, filename=None,
                  data_dir='data', label=''):
+        # thread control
         self._lock = threading.Lock()
         self.updated = threading.Event()
 
+        # IO
         self.record = record
         if filename is None:
-            filename = new_filename(self, data_dir, label)
+            filename = self._new_filename(data_dir, label)
         # make sure data directory exists
         makedir(filename)
         self.data_dir = data_dir
         self._filename = filename
 
-        # initialize metadata if necessary, and keep record of pipeline
+        # metadata
+        # initialize if necessary, and keep record of pipeline
         if metadata is None:
             metadata = {}
         try:
             metadata.setdefault('pipeline', [])
-            metadata['pipeline'].append(type(self).__name__)
         except TypeError:
             raise TypeError("Metadata must be a dict")
         self.metadata = metadata
-        # write metadata to .json with same name as data file
-        self._write_metadata_to_file()
+        self.update_pipeline_metadata(self)
 
     @property
     def data(self):
@@ -76,6 +78,12 @@ class Data:
         """Update data."""
         raise NotImplementedError()
 
+    def update_pipeline_metadata(self, obj):
+        # TODO: More detailed object information
+        self.metadata['pipeline'].append(type(obj).__name__)
+        # write metadata to .json with same name as data file
+        self._write_metadata_to_file()
+
     def _write_metadata_to_file(self):
         try:
             metadata_json = json.dumps(self.metadata, indent=4)
@@ -83,6 +91,35 @@ class Data:
             raise TypeError("JSON could not serialize metadata")
         with open(self._filename + '.json', 'w') as f:
             f.write(metadata_json)
+
+    def _new_filename(self, data_dir='data', label=''):
+        date = datetime.date.today().isoformat()
+        classname = type(self).__name__
+        if label:
+            label += '_'
+
+        filename = './{}/{}_{}_{}{{}}'.format(data_dir, date, classname, label)
+        # incremental counter to prevent overwrites
+        # (based on existence of metadata file)
+        count = 0
+        while os.path.exists(filename.format(count) + '.json'):
+            count += 1
+        filename = filename.format(count)
+
+        return filename
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        for k, v in self.__dict__.items():
+            # thread lock objects cannot be copied directly
+            mask = {'_lock': threading.Lock(), 'updated': threading.Event()}
+            if k in mask:
+                setattr(clone, k, mask[k])
+            else:
+                setattr(clone, k, copy.deepcopy(v, memo))
+        return clone
 
 
 class TimeSeries(Data):
@@ -92,27 +129,27 @@ class TimeSeries(Data):
             Approximate, due to floor conversion to number of samples.
     """
 
-    def __init__(self, ch_names, sfreq, n_samples, record=False, metadata=None,
-                 filename=None, data_dir='data', label=None):
+    def __init__(self, ch_names, sfreq, n_samples=2560, record=True,
+                 metadata=None, filename=None, data_dir='data', label=''):
         Data.__init__(self, record=record, metadata=metadata,
-                      filename=filename, data_dir=data_dir, label=None)
+                      filename=filename, data_dir=data_dir, label=label)
 
         self.dtype = np.dtype({'names': ["time"] + ch_names,
                                'formats': ['f8'] * (1 + len(ch_names))})
+        self.n_samples = n_samples
         self.sfreq = sfreq
         self.initialize()
 
     @classmethod
     def with_window(cls, ch_names, sfreq, window=10, **kwargs):
-        """Make an instance with a given window length.
-
-
-        """
+        """Make an instance with a given window length."""
         n_samples = int(window * sfreq)
         return cls(ch_names, sfreq, n_samples, **kwargs)
 
-    def initialize(self):
+    def initialize(self, n_samples=None):
         """Initialize stored samples to zeros."""
+        if n_samples is not None:
+            self.n_samples = n_samples
         with self._lock:
             self._data = np.zeros((self.n_samples,), dtype=self.dtype)
         self._count = self.n_samples
@@ -122,7 +159,6 @@ class TimeSeries(Data):
         new = self._format_samples(timestamps, samples)
 
         self._count -= len(new)
-
         cutoff = len(new) + self._count
         self._append(new[:cutoff])
         if self._count < 1:
@@ -135,13 +171,14 @@ class TimeSeries(Data):
 
     def _append(self, new):
         with self._lock:
-            push_rows(self._data, new)
+            self._data = push_rows(self._data, new)
 
     def _write_to_file(self):
         with self._lock:
-            with open(self._filename, 'a') as f:
-                lines = [','.join(str(n) for n in row) for row in self._data]
-                self._file.writelines(lines)
+            with open(self._filename + ".csv", 'a') as f:
+                for row in self._data:
+                    line = ','.join(str(n) for n in row)
+                    f.write(line + '\n')
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
@@ -151,7 +188,8 @@ class TimeSeries(Data):
     @property
     def ch_names(self):
         """Names of channels."""
-        return self._data.dtype['channels'].names
+        # Assumes 'time' is in first column
+        return self.dtype.names[1:]
 
     @property
     def window(self):
@@ -177,9 +215,14 @@ class TimeSeries(Data):
 class Transformer(threading.Thread):
 
     def __init__(self, data_in):
+        threading.Thread.__init__(self)
         self.data_in = data_in
-        self.metadata = data_in.metadata
-        self.metadata['pipeline'].append(type(self).__name__)
+
+    def similar_output(self):
+        """Call in `__init__` when `data_out` has same form as `data_in`."""
+        self.data_out = copy.deepcopy(self.data_in)
+        self.data_out.update_pipeline_metadata(self)
+        self.data_out.update_pipeline_metadata(self.data_out)
 
     def run(self):
         raise NotImplementedError()
@@ -192,7 +235,7 @@ class MNETransformer(Transformer):
     """
     def __init__(self, data_in, source_type='eeg', scaling=1E6,
                  montage='standard_1020'):
-        Transformer.__init__(data_in)
+        Transformer.__init__(self, data_in=data_in)
 
         channel_types = [source_type] * len(data_in.ch_names)
         self.source_type = source_type
@@ -229,20 +272,15 @@ class ICAClean(MNETransformer):
     def __init__(self, data_in, ica_samples=1024, ica_freq=64,
                  method='fastica', n_exclude=1, filter_=False,
                  montage='standard_1020', autostart=True, **kwargs):
-        MNETransformer.__init__(data_in, montage=montage)
 
-        n_samples = max(data_in.n_samples, ica_samples)
+        MNETransformer.__init__(self, data_in=data_in, montage=montage)
 
-        # TODO: better Data object copying?
+        # output is similar to input
+        self.similar_output()
+        # ... but could be longer depending on ica_samples
+        n_samples = max(ica_samples, self.data_in.n_samples)
+        self.data_out.initialize(n_samples)
 
-        self.data_out = TimeSeries(ch_names=data_in.ch_names,
-                                   sfreq=data_in.sfreq,
-                                   n_samples=n_samples,
-                                   record=data_in.record,
-                                   metadata=self.metadata,
-                                   filename=None,
-                                   data_dir=data_in.data_dir,
-                                   label=None)
         self.ica = ICA(n_components=len(self.data_out.ch_names), method=method,
                        **kwargs)
         self.filter_ = filter_
@@ -402,23 +440,7 @@ def push_rows(arr, rows):
     """Add `rows` to the end of `arr` without changing size of `arr`"""
     n = arr.shape[0]
     arr = np.concatenate([arr, rows], axis=0)
-    arr = arr[-n:]
-
-
-def new_filename(data, data_dir='data', label=''):
-    date = datetime.date.today().isoformat()
-    classname = type(data).__name__
-    if label:
-        label += '_'
-    filename = './{}/{}_{}_{}{{}}.csv'.format(data_dir, date, classname, label)
-
-    # incremental counter to prevent overwrites
-    count = 0
-    while os.path.exists(filename.format(count)):
-        count += 1
-    filename = filename.format(count)
-
-    return filename
+    return arr[-n:]
 
 
 def makedir(filename):

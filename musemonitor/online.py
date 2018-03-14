@@ -61,6 +61,7 @@ class LSLStreamer(threading.Thread):
 
         # data class
         if data is None:
+	    # TODO: add LSLStreamer info to pipeline metadata
             self.data = utils.TimeSeries(self.ch_names, self.sfreq)
         else:
             self.data = data
