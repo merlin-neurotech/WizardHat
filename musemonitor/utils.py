@@ -4,6 +4,7 @@
 """
 
 import datetime
+import json
 import os
 import threading
 
@@ -33,10 +34,30 @@ class Data:
         metadata (dict):
     """
 
-    def __init__(self, metadata=None):
+    def __init__(self, record=False, metadata=None, filename=None,
+                 data_dir='data', label=''):
         self._lock = threading.Lock()
         self.updated = threading.Event()
+
+        self.record = record
+        if filename is None:
+            filename = new_filename(self, data_dir, label)
+        # make sure data directory exists
+        makedir(filename)
+        self.data_dir = data_dir
+        self._filename = filename
+
+        # initialize metadata if necessary, and keep record of pipeline
+        if metadata is None:
+            metadata = {}
+        try:
+            metadata.setdefault('pipeline', [])
+            metadata['pipeline'].append(type(self).__name__)
+        except TypeError:
+            raise TypeError("Metadata must be a dict")
         self.metadata = metadata
+        # write metadata to .json with same name as data file
+        self._write_metadata_to_file()
 
     @property
     def data(self):
@@ -55,11 +76,13 @@ class Data:
         """Update data."""
         raise NotImplementedError()
 
-    def _write_to_file(self):
-        with self._lock:
-            for row in self._data:
-                line = ','.join(str(n) for n in row) + '\n'
-                self._file.write(line)
+    def _write_metadata_to_file(self):
+        try:
+            metadata_json = json.dumps(self.metadata, indent=4)
+        except TypeError:
+            raise TypeError("JSON could not serialize metadata")
+        with open(self._filename + '.json', 'w') as f:
+            f.write(metadata_json)
 
 
 class TimeSeries(Data):
@@ -71,42 +94,27 @@ class TimeSeries(Data):
 
     def __init__(self, ch_names, sfreq, n_samples, record=False, metadata=None,
                  filename=None, data_dir='data', label=None):
-        Data.__init__(self, metadata)
+        Data.__init__(self, record=record, metadata=metadata,
+                      filename=filename, data_dir=data_dir, label=None)
 
         self.dtype = np.dtype({'names': ["time"] + ch_names,
                                'formats': ['f8'] * (1 + len(ch_names))})
         self.sfreq = sfreq
         self.initialize()
 
-        self.record = record
-        if self.record:
-            if filename is None:
-                date = datetime.date.today().isoformat()
-                filename = './{}/timeseries_{}_{{}}.csv'.format(data_dir, date)
-                if label is None:
-                    # use next available integer label
-                    label = 0
-                    while os.path.exists(filename.format(label)):
-                        label += 1
-                filename = filename.format(label)
-
-            # make sure data directory exists
-            os.makedirs(filename[:filename.rindex(os.path.sep)], exist_ok=True)
-            self.data_dir = data_dir
-            self._filename = filename
-            self._file = open(filename, 'a')
-
     @classmethod
     def with_window(cls, ch_names, sfreq, window=10, **kwargs):
+        """Make an instance with a given window length.
+
+
+        """
         n_samples = int(window * sfreq)
         return cls(ch_names, sfreq, n_samples, **kwargs)
-
 
     def initialize(self):
         """Initialize stored samples to zeros."""
         with self._lock:
             self._data = np.zeros((self.n_samples,), dtype=self.dtype)
-            # self._data['time'] = np.arange(-self.window, 0, 1./self.sfreq)
         self._count = self.n_samples
 
     def update(self, timestamps, samples):
@@ -125,22 +133,15 @@ class TimeSeries(Data):
 
         self.updated.set()
 
-        #print(self._data)
-
     def _append(self, new):
         with self._lock:
-            self._data = np.concatenate([self._data, new], axis=0)
-            self._data = self._data[-self.n_samples:]
+            push_rows(self._data, new)
 
     def _write_to_file(self):
         with self._lock:
-            #print('Saving File')
-            self._file = open(self._filename, 'a')
-            for observation in self._data:
-                line = ','.join(str(n) for n in observation) + '\n'
-                self._file.write(line)
-            self._file.close()
-            #print('File Saved')
+            with open(self._filename, 'a') as f:
+                lines = [','.join(str(n) for n in row) for row in self._data]
+                self._file.writelines(lines)
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
@@ -162,6 +163,11 @@ class TimeSeries(Data):
         return self.n_samples / self.sfreq
 
     @property
+    def samples(self):
+        """Return copy of samples, without timestamps."""
+        return self.data[self.ch_names]
+
+    @property
     def last(self):
         """Last sample stored."""
         with self._lock:
@@ -171,7 +177,9 @@ class TimeSeries(Data):
 class Transformer(threading.Thread):
 
     def __init__(self, data_in):
-        self.data_in = input_data
+        self.data_in = data_in
+        self.metadata = data_in.metadata
+        self.metadata['pipeline'].append(type(self).__name__)
 
     def run(self):
         raise NotImplementedError()
@@ -218,23 +226,24 @@ class MNETransformer(Transformer):
 
 class ICAClean(MNETransformer):
 
-    def __init__(self, data_in, ica_samples=1024, method='fastica',
-                 n_exclude=1, filter_=False, autostart=True,
-                 montage='standard_1020', **kwargs):
+    def __init__(self, data_in, ica_samples=1024, ica_freq=64,
+                 method='fastica', n_exclude=1, filter_=False,
+                 montage='standard_1020', autostart=True, **kwargs):
         MNETransformer.__init__(data_in, montage=montage)
 
         n_samples = max(data_in.n_samples, ica_samples)
 
         # TODO: better Data object copying?
-        self.data = TimeSeries(ch_names=data_in.ch_names,
-                               sfreq=data_in.sfreq,
-                               n_samples=n_samples,
-                               record=data_in.record,
-                               metadata=data_in.metadata,
-                               filename=None,
-                               data_dir=data_in.data_dir,
-                               label=None)
-        self.ica = ICA(n_components=len(self.data.ch_names), method=method,
+
+        self.data_out = TimeSeries(ch_names=data_in.ch_names,
+                                   sfreq=data_in.sfreq,
+                                   n_samples=n_samples,
+                                   record=data_in.record,
+                                   metadata=self.metadata,
+                                   filename=None,
+                                   data_dir=data_in.data_dir,
+                                   label=None)
+        self.ica = ICA(n_components=len(self.data_out.ch_names), method=method,
                        **kwargs)
         self.filter_ = filter_
         self.n_exclude = n_exclude
@@ -257,24 +266,33 @@ class ICAClean(MNETransformer):
                                                      exclude=excludes)
                 samples_cleaned = self._from_mne_array(samples_mne_cleaned)
 
-                self.data.update(samples_cleaned)
+                self.data_out.update(samples_cleaned)
+
+
+class FFT(Transformer):
+
+    def __init__(self):
+        pass
+
+    def run(self):
+        pass
 
 
 def dejitter_timestamps(timestamps, sfreq, last_time=None):
-        """Convert timestamps to have regular sampling intervals.
+    """Convert timestamps to have regular sampling intervals.
 
-        Args:
-            timestamps (List[float]): A list of timestamps.
-            sfreq (int): The sampling frequency.
-            last_time (float): Time of the last sample preceding this set of
-                timestamps. Defaults to `-1/sfreq`.
-        """
-        if last_time is None:
-            last_time = -1/sfreq
-        dejittered = np.arange(len(timestamps), dtype=np.float64)
-        dejittered /= sfreq
-        dejittered += last_time + 1/sfreq
-        return dejittered
+       Args:
+           timestamps (List[float]): A list of timestamps.
+           sfreq (int): The sampling frequency.
+           last_time (float): Time of the last sample preceding this set of
+               timestamps. Defaults to `-1/sfreq`.
+    """
+    if last_time is None:
+        last_time = -1/sfreq
+    dejittered = np.arange(len(timestamps), dtype=np.float64)
+    dejittered /= sfreq
+    dejittered += last_time + 1/sfreq
+    return dejittered
 
 
 def epoching(samples, samples_epoch, samples_overlap=0):
@@ -378,3 +396,30 @@ def samples_threshold(samples, threshold):
         return True
     else:
         return False
+
+
+def push_rows(arr, rows):
+    """Add `rows` to the end of `arr` without changing size of `arr`"""
+    n = arr.shape[0]
+    arr = np.concatenate([arr, rows], axis=0)
+    arr = arr[-n:]
+
+
+def new_filename(data, data_dir='data', label=''):
+    date = datetime.date.today().isoformat()
+    classname = type(data).__name__
+    if label:
+        label += '_'
+    filename = './{}/{}_{}_{}{{}}.csv'.format(data_dir, date, classname, label)
+
+    # incremental counter to prevent overwrites
+    count = 0
+    while os.path.exists(filename.format(count)):
+        count += 1
+    filename = filename.format(count)
+
+    return filename
+
+
+def makedir(filename):
+    os.makedirs(filename[:filename.rindex(os.path.sep)], exist_ok=True)
