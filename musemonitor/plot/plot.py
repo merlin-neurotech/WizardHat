@@ -1,81 +1,29 @@
+"""
 
-from vispy import gloo, app, visuals
+"""
+
+import shaders
+
+import math
 
 import numpy as np
-import math
 from seaborn import color_palette
-
-
-
-
-VERT_SHADER = """
-#version 120
-// y coordinate of the position.
-attribute float a_position;
-// row, col, and time index.
-attribute vec3 a_index;
-varying vec3 v_index;
-// 2D scaling factor (zooming).
-uniform vec2 u_scale;
-// Size of the table.
-uniform vec2 u_size;
-// Number of samples per signal.
-uniform float u_n;
-// Color.
-attribute vec3 a_color;
-varying vec4 v_color;
-// Varying variables used for clipping in the fragment shader.
-varying vec2 v_position;
-varying vec4 v_ab;
-void main() {
-    float nrows = u_size.x;
-    float ncols = u_size.y;
-    // Compute the x coordinate from the time index.
-    float x = -1 + 2*a_index.z / (u_n-1);
-    vec2 position = vec2(x - (1 - 1 / u_scale.x), a_position);
-    // Find the affine transformation for the subplots.
-    vec2 a = vec2(1./ncols, 1./nrows)*.9;
-    vec2 b = vec2(-1 + 2*(a_index.x+.5) / ncols,
-                  -1 + 2*(a_index.y+.5) / nrows);
-    // Apply the static subplot transformation + scaling.
-    gl_Position = vec4(a*u_scale*position+b, 0.0, 1.0);
-    v_color = vec4(a_color, 1.);
-    v_index = a_index;
-    // For clipping test in the fragment shader.
-    v_position = gl_Position.xy;
-    v_ab = vec4(a, b);
-}
-"""
-
-FRAG_SHADER = """
-#version 120
-varying vec4 v_color;
-varying vec3 v_index;
-varying vec2 v_position;
-varying vec4 v_ab;
-void main() {
-    gl_FragColor = v_color;
-    // Discard the fragments between the signals (emulate glMultiDrawArrays).
-    if ((fract(v_index.x) > 0.) || (fract(v_index.y) > 0.))
-        discard;
-    // Clipping test.
-    vec2 test = abs((v_position.xy-v_ab.zw)/v_ab.xy);
-    if ((test.x > 1))
-        discard;
-}
-"""
+from vispy import gloo, app, visuals
 
 
 class Plotter(app.Canvas):
-
+    """ """
     def __init__(self, data_in, title='Plotter'):
         app.Canvas.__init__(self, title=title, keys='interactive')
         self.data_in = data_in
+        # self.data = np.array([data[self.ch_names[0]],data[self.ch_names[1]], data[self.ch_names[2]], data[self.ch_names[3]], data[self.ch_names[4]]])
+        # self.data = self.data.T
 
-class Plotter(app.Canvas):
+
+class Plotter2D(Plotter):
     def __init__(self, data, signal, scale=500):
 
-        self.signal = signal #either 'raw' or 'psd'
+        self.signal = signal  # either 'raw' or 'psd'
 
         # Number of cols and rows in the table.
         nrows = len(data.ch_names)
@@ -92,23 +40,21 @@ class Plotter(app.Canvas):
         y = amplitudes
 
         color = color_palette("RdBu_r", nrows)
-
         color = np.repeat(color, n, axis=0).astype(np.float32)
+
         # Signal 2D index of each vertex (row and col) and x-index (sample index
         # within each signal).
         index = np.c_[np.repeat(np.repeat(np.arange(ncols), nrows), n),
-              np.repeat(np.tile(np.arange(nrows), ncols), n),
-              np.tile(np.arange(n), m)].astype(np.float32)
+                      np.repeat(np.tile(np.arange(nrows), ncols), n),
+                      np.tile(np.arange(n), m)].astype(np.float32)
 
-
-        self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
+        self.program = gloo.Program(shaders.VERT_SHADER, shaders.FRAG_SHADER)
         self.program['a_position'] = y.reshape(-1, 1)
         self.program['a_color'] = color
         self.program['a_index'] = index
         self.program['u_scale'] = (1., 1.)
         self.program['u_size'] = (nrows, ncols)
         self.program['u_n'] = n
-
 
         # text
         self.font_size = 48.
@@ -131,17 +77,7 @@ class Plotter(app.Canvas):
 
         self.show()
 
-
-
     def on_key_press(self, event):
-
-        # toggle filtering
-        if event.key.name == 'D':
-            if self.signal == 'raw':
-                self.signal = 'psd'
-            else:
-                self.signal =='raw'
-
         # increase time scale
         if event.key.name in ['+', '-']:
             if event.key.name == '+':
@@ -163,9 +99,6 @@ class Plotter(app.Canvas):
         self.update()
 
     def updatePlot(self, data):
-
-        self.data = np.array([data[self.ch_names[0]],data[self.ch_names[1]], data[self.ch_names[2]], data[self.ch_names[3]], data[self.ch_names[4]]])
-        self.data = self.data.T
         if self.signal == 'raw':
             plot_data = (self.data - self.data.mean(axis=0)) / self.scale
         elif self.signal =='psd':
@@ -184,7 +117,6 @@ class Plotter(app.Canvas):
 
         self.program['a_position'].set_data(plot_data.T.ravel().astype(np.float32))
         self.update()
-
 
     def on_resize(self, event):
         # Set canvas viewport and reconfigure visual transforms to match.
