@@ -6,7 +6,7 @@ import copy
 import threading
 
 import mne
-from mne.processing import ICA
+from mne.preprocessing import ICA
 
 
 class Transformer(threading.Thread):

@@ -4,7 +4,7 @@
 Management of data streams or other online processes.
 """
 
-from musemonitor import utils
+from wizardhat import utils
 
 from serial.serialutil import SerialException
 import threading
