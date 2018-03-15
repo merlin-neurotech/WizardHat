@@ -1,2 +1,2 @@
 
-from gatt2lsl.stream import *
+from ble2lsl.ble2lsl import *
