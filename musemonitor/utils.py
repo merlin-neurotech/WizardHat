@@ -29,26 +29,70 @@ EEG_BANDS = {
 
 
 class Data:
-    """Parent of data management classes.
+    """Abstract base class of data management classes.
+
+    Provides management of instance-related filenames and pipeline metadata for
+    subclasses. Pipeline metadata consists of a field in the `metadata`
+    attribute which tracks the `Data` and `transform.Transformer` subclasses
+    through which the data has flowed. Complete instance metadata is written
+    to a `.json` file with the same name as the instance's data file (minus
+    its extension). Therefore, each data file corresponds to a `.json` file
+    that describes how the data was generated.
+
+    As an abstract class, `Data` should not be instantiated directly, but must
+    be subclassed (e.g. `TimeSeries`). Subclasses should conform to expected
+    behaviour by overriding methods or properties that raise
+    `NotImplementedError`. A general implementation of the `data` property is
+    provided, which will raise a `NotImplementedError` if the `_data` attribute
+    is undefined; thus, instance data should be stored internally in
+    `self._data`.
+
+    Does not operate in a separate thread, but is accessed by separate threads.
+    Subclasses should use the thread lock so that IO operations from multiple
+    threads do not violate the data (e.g. adding a new row midway through
+    returning a copy).
+
+    Also provides an implementation of `__deepcopy__`, so that an independent
+    but otherwise identical instance can be cloned from an existing instance
+    using `copy.deepcopy`. This may be useful for `transform.Transformer`
+    subclasses that want to output data in a similar form to their input.
+
+    Args:
+        metadata (dict): Arbitrary information added to instance's `.json`.
+        filename (str): User-defined filename for saving instance (meta)data.
+            By default, a name is generated based on the date, the class name
+            of the instance, the user-defined label (if specified), and an
+            incrementing integer to prevent overwrites. For example,
+            "2018-03-01_TimeSeries_somelabel_0".
+        data_dir (str): Directory for saving instance (meta)data.
+            May be relative (e.g. "data" or "./data") or absolute.
+            Defaults to "./data".
+        label (str): User-defined addition to standard filename.
 
     Attributes:
-        metadata (dict):
+        updated (threading.Event): Flag for threads waiting for data updates.
+        filename (str): Final (generated or specified) filename for writing.
+        metadata (dict): All metadata included in instance's `.json`.
+
+    Todo:
+        * Implement with abc.ABC (prevent instantiation of Data itself)
+        * Detailed pipeline metadata: not only class names but attribute values
     """
 
-    def __init__(self, record=False, metadata=None, filename=None,
-                 data_dir='data', label=''):
+    def __init__(self, metadata=None, filename=None, data_dir='./data',
+                 label=''):
+
         # thread control
         self._lock = threading.Lock()
         self.updated = threading.Event()
 
         # IO
-        self.record = record
+        if not data_dir[0] in ['.', '/']:
+            data_dir = './' + data_dir
         if filename is None:
             filename = self._new_filename(data_dir, label)
-        # make sure data directory exists
         makedir(filename)
-        self.data_dir = data_dir
-        self._filename = filename
+        self.filename = filename
 
         # metadata
         # initialize if necessary, and keep record of pipeline
@@ -63,25 +107,42 @@ class Data:
 
     @property
     def data(self):
-        """Return copy of data window."""
+        """A complete copy of instance data.
+
+        Copying prevents unwanted modification due to passing-by-reference.
+
+        A general implementation is provided,
+        """
         try:
             with self._lock:
                 return np.copy(self._data)
         except AttributeError:
             raise NotImplementedError()
+        except TypeError:
+            pass
 
     def initialize(self):
-        """Initialize data window."""
+        """Reset instance data; e.g. to zeros.
+
+        May also contain other expressions necessary for initialization; for
+        example, resetting the count of samples received.
+        """
         raise NotImplementedError()
 
     def update(self):
-        """Update data."""
+        """Update instance data; e.g. by appending rows of new data."""
         raise NotImplementedError()
 
     def update_pipeline_metadata(self, obj):
-        # TODO: More detailed object information
+        """Add some object's details to the instance's pipeline metadata.
+
+        Automatically updates the instance's metadata `.json` file with the new
+        information.
+
+        Args:
+            obj (object): The object to be represented in metadata.
+        """
         self.metadata['pipeline'].append(type(obj).__name__)
-        # write metadata to .json with same name as data file
         self._write_metadata_to_file()
 
     def _write_metadata_to_file(self):
@@ -98,7 +159,7 @@ class Data:
         if label:
             label += '_'
 
-        filename = './{}/{}_{}_{}{{}}'.format(data_dir, date, classname, label)
+        filename = '{}/{}_{}_{}{{}}'.format(data_dir, date, classname, label)
         # incremental counter to prevent overwrites
         # (based on existence of metadata file)
         count = 0
@@ -123,16 +184,28 @@ class Data:
 
 
 class TimeSeries(Data):
-    """
+    """Manages 2D data consisting of rows of times and samples.
+
+    Data is stored in a NumPy structured array where `'time'` is the first
+    field and the remaining fields correspond to the channel names passed
+    during instantiation.
+
+    Args:
+        ch_names (List[str]):
+        sfreq (int):
+        n_samples (int):
+        record (bool):
+        channel_formats (str or List[str]):
+
     Attributes:
-        window (float): Number of seconds of most recent data to store.
-            Approximate, due to floor conversion to number of samples.
+        dtype (np.dtype):
+        n_samples (int):
+        sfreq (int):
     """
 
     def __init__(self, ch_names, sfreq, n_samples=2560, record=True,
-                 metadata=None, filename=None, data_dir='data', label=''):
-        Data.__init__(self, record=record, metadata=metadata,
-                      filename=filename, data_dir=data_dir, label=label)
+                 channel_formats='f8', **kwargs)
+        Data.__init__(self, **kwargs)
 
         self.dtype = np.dtype({'names': ["time"] + ch_names,
                                'formats': ['f8'] * (1 + len(ch_names))})
@@ -175,7 +248,7 @@ class TimeSeries(Data):
 
     def _write_to_file(self):
         with self._lock:
-            with open(self._filename + ".csv", 'a') as f:
+            with open(self.filename + ".csv", 'a') as f:
                 for row in self._data:
                     line = ','.join(str(n) for n in row)
                     f.write(line + '\n')
