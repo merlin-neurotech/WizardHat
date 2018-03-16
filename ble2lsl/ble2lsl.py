@@ -1,8 +1,10 @@
-# -*- coding: utf-8 -*-
-"""Setup streaming of GATT data through LSL.
+"""Interface between BLE/GATT and the Lab Streaming Layer.
 
-
+TODO:
+    * Subclass LSLOutletStreamer instead of using Muse as defaults.
 """
+
+from ble2lsl.devices.muse import MUSE_PARAMS, MUSE_STREAM_PARAMS
 
 import time
 
@@ -13,42 +15,17 @@ import pylsl as lsl
 import threading
 
 
-MUSE_PARAMS = dict(
-    manufacturer='Muse',
-    units='microvolts',
-    ch_names=('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
-    ch_uuids=(
-        '273e0003-4c4d-454d-96be-f03bac821358',
-        '273e0004-4c4d-454d-96be-f03bac821358',
-        '273e0005-4c4d-454d-96be-f03bac821358',
-        '273e0006-4c4d-454d-96be-f03bac821358',
-        '273e0007-4c4d-454d-96be-f03bac821358',
-    ),
-    packet_dtypes=dict(index='uint:16', ch_value='uint:12'),
-    ble=dict(
-        handle=0x000e,
-        stream_on=(0x02, 0x64, 0x0a),
-        stream_off=(0x02, 0x68, 0x0a),
-    ),
-)
-"""General Muse headset parameters."""
-
-
-MUSE_STREAM_PARAMS = dict(
-    name='Muse',
-    type='EEG',
-    channel_count=5,
-    nominal_srate=256,
-    channel_format='float32',
-)
-"""Muse headset parameters for constructing `pylsl.StreamInfo`."""
-
-
 class LSLOutletStreamer():
+    """
+
+    """
 
     def __init__(self, device_params=None, stream_params=None, interface=None,
                  address=None, backend='bgapi', autostart=True, chunk_size=12,
                  time_func=time.time):
+        """
+
+        """
         if device_params is None:
             device_params = MUSE_PARAMS
         if stream_params is None:
@@ -82,6 +59,9 @@ class LSLOutletStreamer():
             self.start()
 
     def connect(self):
+        """
+
+        """
         self.adapter.start()
         if self.address is None:
             self.address = self._get_device_address(self.stream_params["name"])
@@ -96,6 +76,9 @@ class LSLOutletStreamer():
             self.device.subscribe(uuid, callback=self._transmit_packet)
 
     def start(self):
+        """
+
+        """
         self.sample_index = 0
         self.last_tm = 0
         self.start_time = self.time_func()
@@ -108,12 +91,18 @@ class LSLOutletStreamer():
                                       wait_for_response=False)
 
     def stop(self):
+        """
+
+        """
         ble_params = self.device_params["ble"]
         self.device.char_write_handle(handle=ble_params["handle"],
                                       value=ble_params["stream_off"],
                                       wait_for_response=False)
 
     def disconnect(self):
+        """
+
+        """
         self.device.disconnect()
         self.adapter.stop()
 
@@ -192,8 +181,9 @@ class LSLOutletStreamer():
 
 
 class LSLOutletDummy(threading.Thread):
-    def __init__(self, csv_file=None, dur=60, device_params=None, stream_params=None, 
-                 autostart=True,chunk_size=12, time_func=time.time):
+    def __init__(self, csv_file=None, dur=60, device_params=None,
+                 stream_params=None, autostart=True, chunk_size=12,
+                 time_func=time.time):
         threading.Thread.__init__(self)
         if device_params is None:
             device_params = MUSE_PARAMS
@@ -217,12 +207,12 @@ class LSLOutletDummy(threading.Thread):
         # generate or load fake data
         if csv_file is None:
             self.fake_data = self.gen_fake_data(dur)
-            
+
         else:
             # TODO:load csv file to np array
             # get params from somewhere? MUSE_STREAM_PARAMS for now
             pass
-    
+
         if autostart:
             self.start()
 
@@ -237,7 +227,7 @@ class LSLOutletDummy(threading.Thread):
             time.sleep(sec_per_chunk)
         # hacky way to run indefinitely
         self.rerun()
-    
+
     def rerun(self):
         self.run()
 
@@ -253,7 +243,7 @@ class LSLOutletDummy(threading.Thread):
                 .append_child_value("label", ch_name) \
                 .append_child_value("unit", self.device_params["units"]) \
                 .append_child_value("type", stream_params["type"])
-    
+
     def _init_sample(self):
         self.timestamps = np.zeros(self.info.channel_count())
         self.data = np.zeros((self.info.channel_count(), self.chunk_size))
