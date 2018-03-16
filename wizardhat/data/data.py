@@ -1,5 +1,10 @@
-"""
+"""Objects for data storage.
 
+All instantiable classes in this module are subclasses of the abstract class
+`Data`, which enforces a common interface to its children. However, it imposes
+no constraints on the structure of the stored data. Thus, storage in any kind
+of data structure may be implemented in a subclass, so long as the appropriate
+interface methods are defined in that subclass.
 """
 
 import wizardhat.utils as utils
@@ -26,10 +31,8 @@ class Data:
     As an abstract class, `Data` should not be instantiated directly, but must
     be subclassed (e.g. `TimeSeries`). Subclasses should conform to expected
     behaviour by overriding methods or properties that raise
-    `NotImplementedError`. A general implementation of the `data` property is
-    provided, which will raise a `NotImplementedError` if the `_data` attribute
-    is undefined; thus, instance data should be stored internally in
-    `self._data`.
+    `NotImplementedError`; though `data` need not be overrided so long as the
+    subclass's data structure is assigned to `_data`.
 
     Does not operate in a separate thread, but is accessed by separate threads.
     Subclasses should use the thread lock so that IO operations from multiple
@@ -62,6 +65,8 @@ class Data:
         * Implement with abc.ABC (prevent instantiation of Data itself)
         * Detailed pipeline metadata: not only class names but attribute values
         * Decorator for locked methods
+        * Is update really part of interface (Transformer expecting one type of
+          Data will fail if it tries to update another, probably)
     """
 
     def __init__(self, metadata=None, filename=None, data_dir='./data',
@@ -99,7 +104,10 @@ class Data:
 
         Copying prevents unwanted modification due to passing-by-reference.
 
-        A general implementation is provided,
+        This general implementation returns a NumPy copy of the entire data
+        structure assigned to `_data`. This enforces that, unless a subclass
+        specifically overrides this method, the data structure must be
+        assigned to the private attribute `_data`.
         """
         try:
             with self._lock:
@@ -107,8 +115,13 @@ class Data:
         except AttributeError:
             raise NotImplementedError()
 
+    @property
+    def dtype(self):
+        """Data type specification for the instance."""
+        return self._dtype
+
     def initialize(self):
-        """Reset instance data; e.g. to zeros.
+        """Initialize instance data; e.g. to zeros.
 
         May also contain other expressions necessary for initialization; for
         example, resetting the count of samples received.
@@ -130,6 +143,7 @@ class Data:
         """
         self.metadata['pipeline'].append(type(obj).__name__)
         self._write_metadata_to_file()
+
 
     def _write_metadata_to_file(self):
         try:
@@ -172,9 +186,6 @@ class TimeSeries(Data):
     names passed during instantiation. Only the last `n_samples` are stored
     in memory this way, but all samples are written to disk when `record=True`.
 
-    Attributes:
-        dtype (np.dtype): The data type of the data's NumPy structured array.
-
     TODO:
         * Warning (error?) when timestamps are out of order
         * Record to disk on stopping
@@ -202,8 +213,8 @@ class TimeSeries(Data):
         if str(channel_fmt) == channel_fmt:  # quack
             channel_fmt = [channel_fmt] * len(ch_names)
         try:
-            self.dtype = np.dtype({'names': ["time"] + ch_names,
-                                   'formats': [np.float64] + channel_fmt})
+            self._dtype = np.dtype({'names': ["time"] + ch_names,
+                                    'formats': [np.float64] + channel_fmt})
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
@@ -238,7 +249,7 @@ class TimeSeries(Data):
             n_samples (int): Number of samples (rows) in array.
         """
         with self._lock:
-            self._data = np.zeros((self.n_samples,), dtype=self.dtype)
+            self._data = np.zeros((self.n_samples,), dtype=self._dtype)
         self._count = self.n_samples
 
     def update(self, timestamps, samples):
@@ -277,7 +288,7 @@ class TimeSeries(Data):
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         stacked = [(t,) + tuple(s) for t, s in zip(timestamps, samples)]
-        return np.array(stacked, dtype=self.dtype)
+        return np.array(stacked, dtype=self._dtype)
 
     @property
     def n_samples(self):
@@ -291,13 +302,13 @@ class TimeSeries(Data):
         Note:
             Does not include `'time'`.
         """
-        # Assumes 'time' is in first column
         return self.dtype.names[1:]
 
     @property
     def samples(self):
         """Return copy of channel data, without timestamps."""
-        return self.data[self.ch_names]
+        with self._lock:
+            return np.copy(self.data[self.ch_names])
 
     @property
     def last(self):
