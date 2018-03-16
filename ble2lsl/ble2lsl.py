@@ -1,10 +1,24 @@
-"""Interface between BLE/GATT and the Lab Streaming Layer.
+"""Interfacing between Bluetooth Low Energy and Lab Streaming Layer protocols.
+
+Interfacing with devices over Bluetooth Low Energy (BLE) is achieved using the
+`Generic Attribute Profile`_ (GATT) standard procedures for data transfer.
+Reading and writing of GATT descriptors is provided by the `pygatt`_ module.
+
+All classes streaming data through an LSL outlet should subclass
+`OutletStreamer`.
+
+Also includes dummy streamer objects, which do not acquire data over BLE but
+pass local data through an LSL outlet, e.g. for testing.
 
 TODO:
-    * Subclass LSLOutletStreamer instead of using Muse as defaults.
-"""
+    * Documentation for the two BLE backends.
 
-from ble2lsl.devices.muse import MUSE_PARAMS, MUSE_STREAM_PARAMS
+.. _Generic Attribute Profile:
+   https://www.bluetooth.com/specifications/gatt/generic-attributes-overview
+
+.. _pygatt:
+   https://github.com/peplin/pygatt
+"""
 
 import time
 
@@ -15,28 +29,80 @@ import pylsl as lsl
 import threading
 
 
-class LSLOutletStreamer():
+class OutletStreamer:
+    """Base class for streaming data through an LSL outlet.
+
+    Prepares `pylsl.StreamInfo` and `pylsl.StreamOutlet` objects as well as
+    data buffers for handling of incoming chunks.
+
+    Subclasses must implement `start` and `stop` methods for stream control.
+
+    Attributes:
+        info (pylsl.StreamInfo):
+        outlet (pylsl.StreamOutlet):
+
+    TODO:
+        * get source_id... serial number from Muse? MAC address?
+        * Implement with abc.ABC
+        * Some way to generalize autostart behaviour?
+    """
+
+    def __init__(self, stream_params=None, chunk_size=None,
+                 time_func=time.time):
+        """Construct an `OutletStreamer` object.
+
+        Args:
+            stream_params (dict): Parameters to construct `pylsl.StreamInfo`
+            chunk_size (int): Number of samples pushed per LSL chunk
+            time_func (function): Function for generating timestamps
+        """
+        if stream_params is None:
+            stream_params = {}
+        self._stream_params = stream_params
+        self._chunk_size = chunk_size
+        self._time_func = time_func
+
+        # construct LSL StreamInfo and StreamOutlet
+        self.info = lsl.StreamInfo(**stream_params, source_id='')
+        self.outlet = lsl.StreamOutlet(self.info, chunk_size=chunk_size,
+                                       max_buffered=360)
+
+        self._init_sample()
+
+    def start(self):
+        """Begin streaming through the LSL outlet."""
+        raise NotImplementedError()
+
+    def stop(self):
+        """Stop/pause streaming through the LSL outlet."""
+        raise NotImplementedError()
+
+    def _init_sample(self):
+        self._timestamps = np.zeros(self.info.channel_count())
+        self._data = np.zeros((self.info.channel_count(), self._chunk_size))
+
+    def _push_chunk(self, channels, timestamps):
+        for sample in range(self.chunk_size):
+            pass
+            #self.outlet.push_sample(channels[:, sample], timestamps[sample])
+
+
+class DeviceStreamer(OutletStreamer):
     """
 
     """
 
     def __init__(self, device_params=None, stream_params=None, interface=None,
                  address=None, backend='bgapi', autostart=True, chunk_size=12,
-                 time_func=time.time):
+                 **kwargs):
         """
 
         """
-        if device_params is None:
-            device_params = MUSE_PARAMS
-        if stream_params is None:
-            stream_params = MUSE_STREAM_PARAMS
-
+        OutletStreamer.__init__(self, stream_params=stream_params,
+                                chunk_size=chunk_size, **kwargs)
         self.device_params = device_params
-        self.stream_params = stream_params
-        self.chunk_size = chunk_size
         self.interface = interface
         self.address = address
-        self.time_func = time_func
 
         # initialize gatt adapter
         if backend == 'gatt':
@@ -48,15 +114,24 @@ class LSLOutletStreamer():
             raise(ValueError("Invalid backend specified; use bgapi or gatt."))
         self.backend = backend
 
-        # construct LSL StreamInfo and StreamOutlet
-        self._init_stream_info(stream_params)
-        self.outlet = lsl.StreamOutlet(self.info, chunk_size=chunk_size,
-                                       max_buffered=360)
         self._set_packet_format()
+        self._add_device_info()
 
         if autostart:
             self.connect()
             self.start()
+
+    @classmethod
+    def from_device(cls, device, **kwargs):
+        """Construct a `DeviceStreamer` from a device in `ble2lsl.devices`.
+
+        Args:
+           device: A device module in `ble2lsl.devices`.
+               For example, `ble2lsl.devices.muse2016`.
+        """
+        return cls(device_params=device.PARAMS,
+                   stream_params=device.STREAM_PARAMS,
+                   **kwargs)
 
     def connect(self):
         """
@@ -83,8 +158,6 @@ class LSLOutletStreamer():
         self.last_tm = 0
         self.start_time = self.time_func()
 
-        self._init_sample()
-
         ble_params = self.device_params["ble"]
         self.device.char_write_handle(ble_params["handle"],
                                       value=ble_params["stream_on"],
@@ -106,16 +179,7 @@ class LSLOutletStreamer():
         self.device.disconnect()
         self.adapter.stop()
 
-    def _get_device_address(self, name):
-        list_devices = self.adapter.scan(timeout=10.5)
-        for device in list_devices:
-            if name in device['name']:
-                return device['address']
-        raise(ValueError("No devices found with name `{}`".format(name)))
-
-    def _init_stream_info(self, stream_params):
-        self.info = lsl.StreamInfo(**stream_params, source_id="MuseNone")
-
+    def _add_device_info(self):
         self.info.desc().append_child_value("manufacturer",
                                             self.device_params["manufacturer"])
 
@@ -124,11 +188,17 @@ class LSLOutletStreamer():
             self.channels.append_child("channel") \
                 .append_child_value("label", ch_name) \
                 .append_child_value("unit", self.device_params["units"]) \
-                .append_child_value("type", stream_params["type"])
+                .append_child_value("type", self.stream_params["type"])
+
+    def _get_device_address(self, name):
+        list_devices = self.adapter.scan(timeout=10.5)
+        for device in list_devices:
+            if name in device['name']:
+                return device['address']
+        raise(ValueError("No devices found with name `{}`".format(name)))
 
     def _set_packet_format(self):
         dtypes = self.device_params["packet_dtypes"]
-        n_chan = self.info.channel_count()
         self.packet_format = dtypes["index"] + \
                              (',' + dtypes["ch_value"]) * self.chunk_size
 
@@ -171,86 +241,59 @@ class LSLOutletStreamer():
 
         return packet_index, packet_values
 
-    def _init_sample(self):
-        self.timestamps = np.zeros(self.info.channel_count())
-        self.data = np.zeros((self.info.channel_count(), self.chunk_size))
 
-    def _push_chunk(self, channels, timestamps):
-        for sample in range(self.chunk_size):
-            self.outlet.push_sample(channels[:, sample], timestamps[sample])
+class DummyStreamer(OutletStreamer):
+    """
 
+    """
 
-class LSLOutletDummy(threading.Thread):
-    def __init__(self, csv_file=None, dur=60, device_params=None,
-                 stream_params=None, autostart=True, chunk_size=12,
-                 time_func=time.time):
-        threading.Thread.__init__(self)
-        if device_params is None:
-            device_params = MUSE_PARAMS
-        if stream_params is None:
-            stream_params = MUSE_STREAM_PARAMS
+    def __init__(self, dummy_func=None, dur=60, sfreq=256, n_chan=4,
+                 csv_file=None, autostart=True, **kwargs):
+        """
 
-        self.device_params = device_params
-        self.stream_params = stream_params
-        self.chunk_size = chunk_size
-        self.time_func = time_func
-        self.csv_file = csv_file
+        """
+        OutletStreamer.__init__(self, **kwargs)
 
-        self.srate = self.stream_params['nominal_srate']
-        self.n_chan = self.stream_params['channel_count']
-
-        # construct LSL StreamInfo and StreamOutlet
-        self._init_stream_info(stream_params)
-        self.outlet = lsl.StreamOutlet(self.info, chunk_size=chunk_size,
-                                       max_buffered=360)
+        self._thread = threading.Thread(target=self._stream)
 
         # generate or load fake data
         if csv_file is None:
+            self.sfreq = sfreq
+            self.n_chan = n_chan
             self.fake_data = self.gen_fake_data(dur)
-
         else:
+            self.csv_file = csv_file
             # TODO:load csv file to np array
-            # get params from somewhere? MUSE_STREAM_PARAMS for now
-            pass
 
+        self._proceed = True
         if autostart:
-            self.start()
+            self._thread.start()
 
-    def run(self):
-        self.start_time = self.time_func()
-        chunk_inds = np.arange(0, len(self.fake_data.T), self.chunk_size)
-        for chunk_ind in chunk_inds:
-            self.make_chunk(chunk_ind)
-            self._push_chunk(self.data, self.timestamps)
-            # force sampling rate
-            sec_per_chunk = 1/(self.srate/self.chunk_size)
-            time.sleep(sec_per_chunk)
-        # hacky way to run indefinitely
-        self.rerun()
+    @classmethod
+    def impersonate_device(cls, device, dummy_func=None, dur=60, csv_file=None,
+                           **kwargs):
+        """
 
-    def rerun(self):
-        self.run()
+        Args:
 
-    def _init_stream_info(self, stream_params):
-        self.info = lsl.StreamInfo(**stream_params, source_id="MuseNone")
+        """
+        return cls(dur=dur,
+                   sfreq=device.STREAM_PARAMS['nominal_srate'],
+                   n_chan=device.STREAM_PARAMS['channel_count'],
+                   device_params=device.PARAMS,
+                   stream_params=device.STREAM_PARAMS,
+                   **kwargs)
 
-        self.info.desc().append_child_value("manufacturer",
-                                            self.device_params["manufacturer"])
-
-        self.channels = self.info.desc().append_child("channels")
-        for ch_name in self.device_params["ch_names"]:
-            self.channels.append_child("channel") \
-                .append_child_value("label", ch_name) \
-                .append_child_value("unit", self.device_params["units"]) \
-                .append_child_value("type", stream_params["type"])
-
-    def _init_sample(self):
-        self.timestamps = np.zeros(self.info.channel_count())
-        self.data = np.zeros((self.info.channel_count(), self.chunk_size))
-
-    def _push_chunk(self, channels, timestamps):
-        for sample in range(self.chunk_size):
-            self.outlet.push_sample(channels[:, sample], timestamps[sample])
+    def _stream(self):
+        while self._proceed:
+            self.start_time = self.time_func()
+            chunk_inds = np.arange(0, len(self.fake_data.T), self.chunk_size)
+            for chunk_ind in chunk_inds:
+                self.make_chunk(chunk_ind)
+                self._push_chunk(self.data, self.timestamps)
+                # force sampling rate
+                sec_per_chunk = 1/(self.srate/self.chunk_size)
+                time.sleep(sec_per_chunk)
 
     def gen_fake_data(self, dur, freqs=[5, 10, 12, 20]):
         n_fake_samples = dur*self.srate

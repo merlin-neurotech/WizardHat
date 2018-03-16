@@ -1,7 +1,7 @@
 """Interfacing parameters for the Muse headband (2016 version)."""
 
 
-MUSE_PARAMS = dict(
+PARAMS = dict(
     manufacturer='Muse',
     units='microvolts',
     ch_names=('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
@@ -22,7 +22,7 @@ MUSE_PARAMS = dict(
 """General Muse headset parameters."""
 
 
-MUSE_STREAM_PARAMS = dict(
+STREAM_PARAMS = dict(
     name='Muse',
     type='EEG',
     channel_count=5,
