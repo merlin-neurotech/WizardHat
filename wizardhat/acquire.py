@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Management of data streams or other online processes.
+"""Acquisition of data from streaming protocols, particularly LSL.
+
+The `Lab Streaming Layer`_ (LSL) is a protocol for transmission of time series
+measurements over local networks. A number of tools are available for handling
+data streamed over LSL; please refer to its documentation for details.
+
+Note:
+    In the standard implementation of Python (CPython), thread execution is
+    managed by the Global Interpreter Lock (GIL). Because of this, and in
+    particular because of unavoidable background processes such as memory
+    management/garbage collection, Python programs cannot guarantee real-time
+    execution, but only approach it. Thus, at high process loads there may be
+    momentary streaming lags.
+
+.. _Lab Streaming Layer:
+   https://github.com/sccn/labstreaminglayer
 """
 
-from wizardhat import utils
+from wizardhat import utils, data
 
 from serial.serialutil import SerialException
 import threading
@@ -13,27 +27,17 @@ import numpy as np
 import pylsl as lsl
 
 
-class LSLStreamer(threading.Thread):
-    """Stores most recent samples pulled from an LSL inlet.
+class LSLStreamer:
+    """Passes data from an LSL stream to a `data.TimeSeries` object.
 
     Attributes:
         inlet (pylsl.StreamInlet): The LSL inlet from which to stream data.
-        data (numpy.ndarray): Most recent `n_samples` streamed from inlet.
-            `'samples'` initialized to zeros, some of which will remain before
-            the first `n_samples` have been streamed.
-        new_data (numpy.ndarray): Data pulled in most recent chunk.
-        dejitter (bool): Whether to regularize inter-sample intervals.
-        sfreq (int): Sampling frequency of associated LSL inlet.
-        n_chan (int): Number of channels in associated LSL inlet.
-        n_samples (int): Number of most recent samples to store.
+        data (data.TimeSeries): Object in which the incoming data is stored,
+            and which manages writing of that data to disk.
+        sfreq (int): The nominal sampling frequency of the stream.
+        n_chan (int): The number of channels in the stream.
+        ch_names (List[str]): The names of the channels in the stream.
 
-        updated (threading.Event): Flag when new data is pulled.
-        lock (threading.Lock): Thread lock for safe access to streamed data.
-        proceed (bool): Whether to keep streaming; set to False to end stream
-            after current chunk.
-
-    TODO:
-        Exclude channels by name.
     """
 
     def __init__(self, inlet=None, data=None, dejitter=True,
@@ -41,59 +45,108 @@ class LSLStreamer(threading.Thread):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
-            inlet (pylsl.StreamInlet): The LSL inlet from which to pull chunks.
-                Defaults to call to `get_lsl_inlet`.
+            inlet (pylsl.StreamInlet): The LSL inlet from which to stream data.
+                By default, this is created by resolving an available LSL
+                stream through a call to `get_lsl_inlet`.
+            data (data.TimeSeries): Object in which the incoming data is
+                stored, and that manages writing of data to disk. By default,
+                this is instantiated based on the channel names and nominal
+                sampling frequency provided by the LSL inlet.
             dejitter (bool): Whether to regularize inter-sample intervals.
-            chunk_samples (int): Maximum number of samples per chunk pulled.
+                If `True`, any timestamps returned by LSL are replaced by
+                evenly-spaced timestamps based on the stream's nominal sampling
+                frequency. Cannot be changed after instantiation due to the
+                inconsistencies this would introduce in the resulting data.
+            chunk_samples (int): Maximum number of samples per chunk pulled
+                from the inlet.
             autostart (bool): Whether to start streaming on instantiation.
+
         """
-        threading.Thread.__init__(self)
+        # resolve LSL stream if necessary
         if inlet is None:
             inlet = get_lsl_inlet()
         self.inlet = inlet
-        self.dejitter = dejitter
 
-        # inlet parameters
+        # acquire inlet parameters
         info = inlet.info()
         self.sfreq = info.nominal_srate()
         self.n_chan = info.channel_count()
         self.ch_names = get_ch_names(info)
 
-        # data class
+        # instantiate the `data.TimeSeries` instance if one is not provided
         if data is None:
-	    # TODO: add LSLStreamer info to pipeline metadata
-            self.data = utils.TimeSeries(self.ch_names, self.sfreq)
+            metadata = {"pipeline": [type(self).__name__]}
+            self.data = data.TimeSeries(self.ch_names, self.sfreq,
+                                        metadata=metadata)
         else:
+            # user-defined instance
             self.data = data
+            # TODO: do a test update to make sure it's a TimeSeries instance
+            #try:
+            #    test_samples = np.zeros(0, dtype=self.data.dtype)
+            #    self.data.update([0], test_samples)
+            #except
 
-        # manual thread switch
-        self.proceed = True
-
-        # function aliases
+        # alias for `inlet.pull_chunk`
         self._pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
-                                                     max_samples=chunk_samples)
+                                                    max_samples=chunk_samples)
 
+        self._dejitter = dejitter
+        self._new_thread()
         if autostart:
             self.start()
 
-    def run(self):
-        """Streaming thread. Overrides `threading.Thread.run`."""
+    def start(self):
+        """Start data streaming.
+
+        As the thread can only be started once and by default is started on
+        instantiation of `TimeSeries`, this has no effect on streaming if
+        called more than once without subsequent calls to `stop`.
+
+        Samples between a call to `stop` and a subsequent call to `start` will
+        be lost, leading to a discontinuity in the stored data.
+
+        TODO:
+            * TimeSeries effects (e.g. warn about discontinuity on restart)
+        """
         try:
-            while self.proceed:
+            self._thread.start()
+        except RuntimeError:
+            if self._thread.ident:
+                # thread exists but has stopped; create and start a new thread
+                self._new_thread()
+                self._thread.start()
+            else:
+                print("Streaming has already started!")
+
+    def stop(self):
+        """Stop data streaming."""
+        self._proceed = False
+
+    def _stream(self):
+        """Streaming thread."""
+        try:
+            while self._proceed:
                 samples, timestamps = self._pull_chunk()
                 if timestamps:
-                    if self.dejitter:
+                    if self._dejitter:
                         timestamps = self._dejitter_timestamps(timestamps)
                     self.data.update(timestamps, samples)
 
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
 
+    def _new_thread(self):
+        # break loop in `stream` to cause thread to return
+        self._proceed = False
+        # create new thread
+        self._thread = threading.Thread(target=self._stream)
+        self._proceed = True
 
     def _dejitter_timestamps(self, timestamps):
         """Partial function for more concise call during loop."""
-        dejittered = utils.dejitter_timestamps(timestamps, sfreq=self.sfreq,
-                                               last_time=self.data.last['time'])
+        dejittered = dejitter_timestamps(timestamps, sfreq=self.sfreq,
+                                         last_time=self.data.last['time'])
         return dejittered
 
 
@@ -129,3 +182,20 @@ def get_ch_names(info):
             yield ch_xml.child_value('label')
             ch_xml = ch_xml.next_sibling()
     return list(next_ch_name())
+
+
+def dejitter_timestamps(timestamps, sfreq, last_time=None):
+    """Convert timestamps to have regular sampling intervals.
+
+       Args:
+           timestamps (List[float]): A list of timestamps.
+           sfreq (int): The sampling frequency.
+           last_time (float): Time of the last sample preceding this set of
+               timestamps. Defaults to `-1/sfreq`.
+    """
+    if last_time is None:
+        last_time = -1/sfreq
+    dejittered = np.arange(len(timestamps), dtype=np.float64)
+    dejittered /= sfreq
+    dejittered += last_time + 1/sfreq
+    return dejittered

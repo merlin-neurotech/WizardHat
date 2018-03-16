@@ -71,23 +71,26 @@ class Data:
         self._lock = threading.Lock()
         self.updated = threading.Event()
 
-        # IO
+        # file output preparations
         if not data_dir[0] in ['.', '/']:
             data_dir = './' + data_dir
         if filename is None:
             filename = self._new_filename(data_dir, label)
-        utils.makedir(filename)
+        utils.makedirs(filename)
         self.filename = filename
+        self._data_dir = data_dir
+        self._label = label
 
         # metadata
-        # initialize if necessary, and keep record of pipeline
         if metadata is None:
             metadata = {}
         try:
+            # initialize if necessary
             metadata.setdefault('pipeline', [])
         except TypeError:
             raise TypeError("Metadata must be a dict")
         self.metadata = metadata
+        # add subclass information to pipeline metadata and write to file
         self.update_pipeline_metadata(self)
 
     @property
@@ -103,8 +106,6 @@ class Data:
                 return np.copy(self._data)
         except AttributeError:
             raise NotImplementedError()
-        except TypeError:
-            pass
 
     def initialize(self):
         """Reset instance data; e.g. to zeros.
@@ -135,7 +136,7 @@ class Data:
             metadata_json = json.dumps(self.metadata, indent=4)
         except TypeError:
             raise TypeError("JSON could not serialize metadata")
-        with open(self._filename + '.json', 'w') as f:
+        with open(self.filename + '.json', 'w') as f:
             f.write(metadata_json)
 
     def _new_filename(self, data_dir='data', label=''):
@@ -155,17 +156,12 @@ class Data:
         return filename
 
     def __deepcopy__(self, memo):
-        cls = self.__class__
-        clone = cls.__new__(cls)
-        memo[id(self)] = clone
-        for k, v in self.__dict__.items():
-            # thread lock objects cannot be copied directly
-            mask = {'_lock': threading.Lock(), 'updated': threading.Event()}
-            if k in mask:
-                setattr(clone, k, mask[k])
-            else:
-                setattr(clone, k, copy.deepcopy(v, memo))
-        return clone
+        # threading objects cannot be copied normally
+        # & a new filename is needed
+        mask = {'_lock': threading.Lock(),
+                'updated': threading.Event(),
+                'filename': self._new_filename(self._data_dir, self._label)}
+        return utils.deepcopy_mask(self, mask, memo)
 
 
 class TimeSeries(Data):
