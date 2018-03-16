@@ -2,7 +2,7 @@
 
 """
 
-import wizardhat.plot.shaders as shaders
+from wizardhat.plot import shaders
 
 import math
 
