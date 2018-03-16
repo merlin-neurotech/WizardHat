@@ -4,7 +4,6 @@
 
 import wizardhat.utils as utils
 
-import copy
 import datetime
 import json
 import os
@@ -62,6 +61,7 @@ class Data:
     Todo:
         * Implement with abc.ABC (prevent instantiation of Data itself)
         * Detailed pipeline metadata: not only class names but attribute values
+        * Decorator for locked methods
     """
 
     def __init__(self, metadata=None, filename=None, data_dir='./data',
@@ -165,51 +165,91 @@ class Data:
 
 
 class TimeSeries(Data):
-    """Manages 2D data consisting of rows of times and samples.
+    """Manages 2D time series data: rows of samples indexed in order of time.
 
     Data is stored in a NumPy structured array where `'time'` is the first
-    field and the remaining fields correspond to the channel names passed
-    during instantiation.
-
-    Args:
-        ch_names (List[str]):
-        sfreq (int):
-        n_samples (int):
-        record (bool):
-        channel_formats (str or List[str]):
+    field (named column) and the remaining fields correspond to the channel
+    names passed during instantiation. Only the last `n_samples` are stored
+    in memory this way, but all samples are written to disk when `record=True`.
 
     Attributes:
-        dtype (np.dtype):
-        n_samples (int):
-        sfreq (int):
+        dtype (np.dtype): The data type of the data's NumPy structured array.
+
+    TODO:
+        * Warning (error?) when timestamps are out of order
+        * Record to disk on stopping
     """
 
-    def __init__(self, ch_names, sfreq, n_samples=2560, record=True,
-                 channel_formats='f8', **kwargs):
+    def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
+                 **kwargs):
+        """Create a new `TimeSeries` object.
+
+        Args:
+            ch_names (List[str]): List of channel names.
+            n_samples (int): Number of samples to store in memory.
+            record (bool): Whether to record samples to disk.
+            channel_fmt (str or type or List[str] or List[type]): Data type of
+                channels. If a single string or type is passed, all channels
+                will take that type. A list with the same length as `ch_names`
+                may also be passed to independently specify channel types.
+                Strings should conform to NumPy string datatype specifications;
+                for example, a 64-bit float is specified as `'f8'`. Types may
+                be Python base types (e.g. `float`) or NumPy base dtypes
+               ( e.g. `np.float64`).
+        """
         Data.__init__(self, **kwargs)
 
-        self.dtype = np.dtype({'names': ["time"] + ch_names,
-                               'formats': ['f8'] * (1 + len(ch_names))})
-        self.n_samples = n_samples
-        self.sfreq = sfreq
-        self.initialize()
+        if str(channel_fmt) == channel_fmt:  # quack
+            channel_fmt = [channel_fmt] * len(ch_names)
+        try:
+            self.dtype = np.dtype({'names': ["time"] + ch_names,
+                                   'formats': [np.float64] + channel_fmt})
+        except ValueError:
+            raise ValueError("Number of formats must match number of channels")
+
+        self.initialize(n_samples)
 
     @classmethod
     def with_window(cls, ch_names, sfreq, window=10, **kwargs):
-        """Make an instance with a given window length."""
-        n_samples = int(window * sfreq)
-        return cls(ch_names, sfreq, n_samples, **kwargs)
+        """Constructs an instance based on a desired duration of storage.
 
-    def initialize(self, n_samples=None):
-        """Initialize stored samples to zeros."""
-        if n_samples is not None:
-            self.n_samples = n_samples
+        It is often convenient to specify the length of the array stored in
+        memory as a duration. For example, a duration of 10 seconds might be
+        specified so that the last 10 seconds of data will be available to an
+        instance of `plot.Plotter`.
+
+        This constructor also expects to be passed a nominal sampling frequency
+        so that it can determine the number of samples corresponding to the
+        desired duration. Note that duration is usually not evenly divisible by
+        sampling frequency, so that the number of samples stored
+
+        Args:
+            ch_names (List[str]): List of channel names.
+            sfreq (int): Nominal sampling frequency of the input.
+            window (float): Desired duration of live storage.
+        """
+        n_samples = int(window * sfreq)
+        return cls(ch_names, n_samples, **kwargs)
+
+    def initialize(self, n_samples):
+        """Initialize NumPy structured array for data storage.
+
+        Args:
+            n_samples (int): Number of samples (rows) in array.
+        """
         with self._lock:
             self._data = np.zeros((self.n_samples,), dtype=self.dtype)
         self._count = self.n_samples
 
     def update(self, timestamps, samples):
-        """Append most recent chunk to stored data and retain window size."""
+        """Append sample(s) to stored data.
+
+        Args:
+            timestamps (Iterable[np.float64]): Timestamp for each sample.
+            samples (Iterable): Channel data.
+                Data type(s) in `Iterable` correspond to the type(s) specified
+                in `dtype`.
+        """
         new = self._format_samples(timestamps, samples)
 
         self._count -= len(new)
@@ -240,27 +280,27 @@ class TimeSeries(Data):
         return np.array(stacked, dtype=self.dtype)
 
     @property
+    def n_samples(self):
+        """Number of samples stored in the NumPy array."""
+        return self._data.shape[0]
+
+    @property
     def ch_names(self):
-        """Names of channels."""
+        """Channel names.
+
+        Note:
+            Does not include `'time'`.
+        """
         # Assumes 'time' is in first column
         return self.dtype.names[1:]
 
     @property
-    def window(self):
-        """Actual number of seconds stored.
-
-        Not necessarily the same as the requested window size due to flooring
-        to the nearest sample.
-        """
-        return self.n_samples / self.sfreq
-
-    @property
     def samples(self):
-        """Return copy of samples, without timestamps."""
+        """Return copy of channel data, without timestamps."""
         return self.data[self.ch_names]
 
     @property
     def last(self):
-        """Last sample stored."""
+        """Last-stored row (timestamp and sample)."""
         with self._lock:
             return np.copy(self._data[-1])
