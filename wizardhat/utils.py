@@ -1,138 +1,64 @@
+"""Utilities for use within the WizardHat API and its extensions.
+
+The intention of this module is to avoid unnecessary repetition of programming
+constructs. This includes routine manipulations of strings or data structures
+(but not calculations/transformations on data itself), interfacing with the
+operating system, or general-purpose method decorators.
 """
 
-"""
-
+import copy
 import os
 
 import numpy as np
 
 
-def dejitter_timestamps(timestamps, sfreq, last_time=None):
-    """Convert timestamps to have regular sampling intervals.
+def deepcopy_mask(obj, memo, mask=None):
+    """Generalized method for deep copies of objects.
 
-       Args:
-           timestamps (List[float]): A list of timestamps.
-           sfreq (int): The sampling frequency.
-           last_time (float): Time of the last sample preceding this set of
-               timestamps. Defaults to `-1/sfreq`.
-    """
-    if last_time is None:
-        last_time = -1/sfreq
-    dejittered = np.arange(len(timestamps), dtype=np.float64)
-    dejittered /= sfreq
-    dejittered += last_time + 1/sfreq
-    return dejittered
-
-
-def epoching(samples, samples_epoch, samples_overlap=0):
-    """Split samples into epochs of uniform size.
+    Certain types of attributes cannot be copied naively by `copy.deepcopy`;
+    for example, `threading.Lock` objects. These may be manually specified in
+    the `mask` argument.
 
     Args:
-        samples (numpy.ndarray):
-        samples_epoch (int): Number of samples per epoch.
-        samples_overlap (int, optional): Samples of overlap between adjacent
-            epochs.
+        obj (object): The object to be copied.
+        mask (Dict[str, object]): Attributes to be replaced manually.
+            Keys are attribute names and values are new attribute values.
+        memo (dict): Tracks already copied objects to prevent a recursive loop.
+            See the documentation for the standard module `copy`.
     """
-    samples_ = samples.view((samples.dtype[0], len(samples.dtype.names)))
-    n_samples, n_chan = samples_.shape
-
-    samples_shift = int(samples_epoch - samples_overlap)
-    n_epochs = 1 + int(np.floor((n_samples - samples_epoch) / samples_shift))
-    epoched_samples = n_epochs * samples_epoch
-
-    samples_used, remainder = np.split(samples_, np.array([epoched_samples]))
-    markers = samples_shift * np.arange(n_epochs + 1)
-    epochs = np.zeros((samples_epoch, n_chan, n_epochs))
-    for i_epoch in range(n_epochs):
-        ind_epoch = slice(markers[i_epoch], markers[i_epoch] + samples_epoch)
-        epochs[:, :, i_epoch] = samples_used[ind_epoch, :]
-
-    return epochs, remainder
-
-
-def calc_fft(samples, real_out=True):
-    """Calculate the FFT from an array of samples.
-
-    Args:
-        samples (numpy.ndarray): Time-domain samples.
-        real_out (bool): Whether to return only the first half of the result,
-            which is sufficient for the real-valued frequency domain.
-    """
-    n_samples, n_chan = samples.shape
-    hamming_window = np.hamming(n_samples)
-    samples_centered = samples - np.mean(samples, axis=0)
-    samples_centered_hamming = (samples_centered.T * hamming_window).T
-    n_fft = int(2**(1 + np.floor(np.log2(n_samples))))
-    fft = np.fft.fft(samples_centered_hamming, n=n_fft, axis=0) / n_samples
-    if real_out:
-        fft = fft[0:n_fft//2, :]
-    return fft
-
-
-def calc_psd(samples):
-    """Calculate the power spectral density from an array of samples.
-
-    Args:
-        samples (numpy.ndarray): Time-domain samples.
-    """
-    fft = calc_fft(samples)
-    psd = 2 * np.abs(fft)
-    return psd
-
-
-def calc_psd_band_means(samples, sfreq, bands=EEG_BANDS):
-    """Calculate band PSD means from an array of samples.
-
-    Args:
-        samples (numpy.ndarray): Time-domain samples.
-        sfreq (int): Sampling frequency.
-        bands (Dict[str, tuple]): Maps band names to band hi and lo bounds.
-    """
-    psd = calc_psd(samples)
-    fft_freqs = sfreq/2 * np.linspace(0, 1, len(psd))
-    feature_vector = np.ravel([psd_band_mean(psd, band, fft_freqs)
-                               for band in bands.items()])
-    return feature_vector
-
-
-def psd_band_mean(psd, band, fft_freqs):
-    """Calculate the PSD mean for a given band.
-
-    Args:
-        band (Dict[str, tuple]): Maps the band name to the
-        psd (numpy.ndarray): The full power spectral density.
-        fft_freqs (numpy.ndarray): FFT frequencies associated with the PSD.
-    """
-    bounds = band[1]  # get dict values, not key
-    ind = np.where((fft_freqs >= bounds[0]) & (fft_freqs <= bounds[1]))
-    return np.nan_to_num(np.mean(psd[ind, :], axis=1))
-
-
-def calc_feature_matrix(epochs, sfreq):
-    """Calculate the feature matrix from a set of epochs."""
-    n_epochs = epochs.shape[2]
-    feat = calc_psd_band_means(epochs[:, :, 0], sfreq).T
-    feature_matrix = np.zeros((n_epochs, feat.shape[0]))
-
-    for i_epoch in range(n_epochs):
-        feature_matrix[i_epoch, :] = \
-            calc_psd_band_means(epochs[:, :, i_epoch], sfreq).T
-    return feature_matrix
-
-
-def samples_threshold(samples, threshold):
-    if np.mean(np.abs(samples)) > threshold:
-        return True
-    else:
-        return False
+    if mask is None:
+        mask = {}
+    cls = obj.__class__
+    # copy object
+    clone = cls.__new__(cls)
+    memo[id(obj)] = clone
+    # copy object attributes
+    for k, v in obj.__dict__.items():
+        if k in mask:
+            setattr(clone, k, mask[k])
+        else:
+            setattr(clone, k, copy.deepcopy(v, memo))
+    return clone
 
 
 def push_rows(arr, rows):
-    """Add `rows` to the end of `arr` without changing size of `arr`"""
-    n = arr.shape[0]
+    """Append rows to an array and discard the same number from the front.
+
+    The arguments may be any sequence (`Iterable`) that NumPy can convert to
+    `np.ndarray`, but both must have the same number of columns.
+
+    Args:
+        arr (Iterable): Array onto which to append the rows.
+        rows (Iterable): Rows to be appended.
+    """
     arr = np.concatenate([arr, rows], axis=0)
-    return arr[-n:]
+    return arr[-arr.shape[0]:]
 
 
-def makedir(filename):
-    os.makedirs(filename[:filename.rindex(os.path.sep)], exist_ok=True)
+def makedirs(filepath):
+    """Create a directory tree if it does not exist yet, based on a filepath.
+
+    Args:
+        filepath (str): The path for which to create directories.
+    """
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
