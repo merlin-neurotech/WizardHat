@@ -53,7 +53,7 @@ After each time window, data is saved to a CSV file in your directory under a fo
 
 These are the basics of WizardHat; to learn how to transform, filter, and visualize the data on a graph, refer to the documentation file in this repository.
 
-To gain a deeper understanding into how our framework operates, take a look under the hood. 
+To gain a deeper understanding into how our framework operates, take a look under the hood or read the [WizardHat documentation](https://docs.google.com/document/d/1dOymsVdVxN3SgN3mRIzHV1xmjpIjEvz5QSDIQ66D6To/edit?usp=sharing). 
 
 ## Authors
 Matt Laporte 
