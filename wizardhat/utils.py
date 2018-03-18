@@ -51,8 +51,9 @@ def push_rows(arr, rows):
         arr (Iterable): Array onto which to append the rows.
         rows (Iterable): Rows to be appended.
     """
+    n = arr.shape[0]
     arr = np.concatenate([arr, rows], axis=0)
-    return arr[-arr.shape[0]:]
+    return arr[-n:]
 
 
 def makedirs(filepath):

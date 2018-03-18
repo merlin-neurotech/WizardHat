@@ -116,6 +116,16 @@ class Data:
             raise NotImplementedError()
 
     @property
+    def unstructured(self):
+        """Return structured as regular `np.ndarray`.
+
+        TODO:
+            * dtype (np.float64?) based on context
+            * ValueError if self._data is not structured?
+        """
+        return self.data.view((np.float64, self.n_chan + 1))
+
+    @property
     def dtype(self):
         """Data type specification for the instance."""
         return self._dtype
@@ -143,7 +153,6 @@ class Data:
         """
         self.metadata['pipeline'].append(type(obj).__name__)
         self._write_metadata_to_file()
-
 
     def _write_metadata_to_file(self):
         try:
@@ -218,7 +227,9 @@ class TimeSeries(Data):
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
-        self.initialize(n_samples)
+        self._record = record
+
+        self.initialize(int(n_samples))
 
     @classmethod
     def with_window(cls, ch_names, sfreq, window=10, **kwargs):
@@ -242,15 +253,17 @@ class TimeSeries(Data):
         n_samples = int(window * sfreq)
         return cls(ch_names, n_samples, **kwargs)
 
-    def initialize(self, n_samples):
+    def initialize(self, n_samples=None):
         """Initialize NumPy structured array for data storage.
 
         Args:
             n_samples (int): Number of samples (rows) in array.
         """
+        if n_samples is None:
+            n_samples = self.n_samples
         with self._lock:
-            self._data = np.zeros((self.n_samples,), dtype=self._dtype)
-        self._count = self.n_samples
+            self._data = np.zeros((n_samples,), dtype=self._dtype)
+        self._count = n_samples
 
     def update(self, timestamps, samples):
         """Append sample(s) to stored data.
@@ -267,7 +280,7 @@ class TimeSeries(Data):
         cutoff = len(new) + self._count
         self._append(new[:cutoff])
         if self._count < 1:
-            if self.record:
+            if self._record:
                 self._write_to_file()
             self._append(new[cutoff:])
             self._count = self.n_samples
@@ -303,6 +316,11 @@ class TimeSeries(Data):
             Does not include `'time'`.
         """
         return self.dtype.names[1:]
+
+    @property
+    def n_chan(self):
+        """Number of channels."""
+        return len(self.ch_names)
 
     @property
     def samples(self):

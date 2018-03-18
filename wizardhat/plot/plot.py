@@ -13,64 +13,70 @@ from vispy import gloo, app, visuals
 
 class Plotter(app.Canvas):
     """ """
-    def __init__(self, data_in, title='Plotter'):
-        app.Canvas.__init__(self, title=title, keys='interactive')
-        self.data_in = data_in
-        # self.data = np.array([data[self.ch_names[0]],data[self.ch_names[1]], data[self.ch_names[2]], data[self.ch_names[3]], data[self.ch_names[4]]])
-        # self.data = self.data.T
+    def __init__(self, data, plot_params=None):
+        app.Canvas.__init__(self, keys='interactive')
+
+        self.data = data
 
 
-class Plotter2D(Plotter):
-    def __init__(self, data, signal, scale=500):
+class Lines(Plotter):
+    def __init__(self, data, plot_params=None, **kwargs):
+        super().__init__(data, plot_params=plot_params, **kwargs)
 
-        self.signal = signal  # either 'raw' or 'psd'
+        self.n_lines = self.data.n_chan
+        self.n_points = self.data.n_samples
 
-        # Number of cols and rows in the table.
-        nrows = len(data.ch_names)
-        ncols = 1
+        if plot_params is None:
+            plot_params = {}
+        try:
+            self.params = dict(
+                title='Plotter',
+                font_size=48,
+                scale=500,
+                palette=color_palette("RdBu_r", self.n_lines),
+                quality_palette=color_palette("RdYlGn", 11)[::-1],
+            )
+            self.params.update(plot_params)
+        except TypeError:
+            raise TypeError("plot_params not a dict or key-value pairs list")
 
-        m = nrows * ncols  # Number of signals.
-        n = data.n_samples # Number of samples per signal.
+        color = np.repeat(self.params['palette'],
+                          self.n_points, axis=0).astype(np.float32)
 
-        # Various signal amplitudes.
-        amplitudes = np.zeros((m, n)).astype(np.float32)
-        gamma = np.ones((m, n)).astype(np.float32)
+        self._set_program_params(color)
 
-        # Generate the signals as a (m, n) array.
-        y = amplitudes
+        # text
+        self._names = [visuals.TextVisual(ch_name, bold=True, color='white')
+                       for ch_name in self.data.ch_names]
+        self._quality = [visuals.TextVisual('', bold=True, color='white')
+                         for ch_name in self.data.ch_names]
 
-        color = color_palette("RdBu_r", nrows)
-        color = np.repeat(color, n, axis=0).astype(np.float32)
+        self._init_plot()
 
-        # Signal 2D index of each vertex (row and col) and x-index (sample index
-        # within each signal).
-        index = np.c_[np.repeat(np.repeat(np.arange(ncols), nrows), n),
-                      np.repeat(np.tile(np.arange(nrows), ncols), n),
-                      np.tile(np.arange(n), m)].astype(np.float32)
+    def _set_program_params(self, color):
+
+        # Signal 2D index of each vertex (row and col) and x-index (sample
+        # index within each signal).
+        index = np.c_[np.repeat(np.repeat(np.arange(1), self.n_lines),
+                                self.n_points),
+                      np.repeat(np.tile(np.arange(self.n_lines), 1),
+                                self.n_points),
+                      np.tile(np.arange(self.n_points),
+                              self.n_lines)].astype(np.float32)
+
+        position = np.zeros((self.n_lines,
+                             self.n_points)).astype(np.float32).reshape(-1, 1)
 
         self.program = gloo.Program(shaders.VERT_SHADER, shaders.FRAG_SHADER)
-        self.program['a_position'] = y.reshape(-1, 1)
+        self.program['a_position'] = position
         self.program['a_color'] = color
         self.program['a_index'] = index
         self.program['u_scale'] = (1., 1.)
-        self.program['u_size'] = (nrows, ncols)
-        self.program['u_n'] = n
+        self.program['u_size'] = (self.n_lines, 1)
+        self.program['u_n'] = self.n_points
 
-        # text
-        self.font_size = 48.
-        self.names = []
-        self.quality = []
-        for ii in range(self.n_chan):
-            text = visuals.TextVisual(self.ch_names[ii], bold=True, color='white')
-            self.names.append(text)
-            text = visuals.TextVisual('', bold=True, color='white')
-            self.quality.append(text)
-
-        self.quality_colors = color_palette("RdYlGn", 11)[::-1]
-
-        self.scale = scale
-
-        self._timer = app.Timer('auto', connect=self.updatePlot, start=True)
+    def _init_plot(self):
+        self._timer = app.Timer('auto', connect=self.update_plot, start=True)
         gloo.set_viewport(0, 0, *self.physical_size)
         gloo.set_state(clear_color='black', blend=True,
                        blend_func=('src_alpha', 'one_minus_src_alpha'))
@@ -98,24 +104,24 @@ class Plotter2D(Plotter):
         self.program['u_scale'] = (max(1, scale_x_new), max(0.01, scale_y_new))
         self.update()
 
-    def updatePlot(self, data):
-        if self.signal == 'raw':
-            plot_data = (self.data - self.data.mean(axis=0)) / self.scale
-        elif self.signal =='psd':
-            #plot_data = Transformer.FFT(self.data) #Uncomment when transformer class is ready
-            self.signal == 'raw'
-            pass
-        sd = np.std(plot_data[-int(self.sfreq):], axis=0)[::-1] * self.scale
+    def update_plot(self, data):
+        plot_data = self.data.unstructured[:, 1:]
+        plot_data = (plot_data - plot_data.mean(axis=0)) / self.params['scale']
+        sd = np.std(plot_data[-int(256):], axis=0)[::-1]
+        #sd = np.std(plot_data[-int(self.data.sfreq):], axis=0)[::-1]
+        sd *= self.params['scale']
         co = np.int32(np.tanh((sd - 30) / 15)*5 + 5)
-        for ii in range(self.n_chan):
-            self.quality[ii].text = '%.2f' % (sd[ii])
-            self.quality[ii].color = self.quality_colors[co[ii]]
-            self.quality[ii].font_size = 12 + co[ii]
 
-            self.names[ii].font_size = 12 + co[ii]
-            self.names[ii].color = self.quality_colors[co[ii]]
+        for l in range(self.n_lines):
+            self._quality[l].text = '%.2f' % (sd[l])
+            self._quality[l].color = self.params['quality_palette'][co[l]]
+            self._quality[l].font_size = 12 + co[l]
 
-        self.program['a_position'].set_data(plot_data.T.ravel().astype(np.float32))
+            self._names[l].font_size = 12 + co[l]
+            self._names[l].color = self.params['quality_palette'][co[l]]
+
+        plot_data = plot_data.T.ravel().astype(np.float32)
+        self.program['a_position'].set_data(plot_data)
         self.update()
 
     def on_resize(self, event):
@@ -123,65 +129,19 @@ class Plotter2D(Plotter):
         vp = (0, 0, self.physical_size[0], self.physical_size[1])
         self.context.set_viewport(*vp)
 
-        for ii, t in enumerate(self.names):
+        for l, t in enumerate(self._names):
             t.transforms.configure(canvas=self, viewport=vp)
-            t.pos = (self.size[0] * 0.025, ((ii + 0.5)/self.n_chan) * self.size[1])
+            t.pos = (self.size[0] * 0.025,
+                     ((l + 0.5)/self.n_lines) * self.size[1])
 
-        for ii, t in enumerate(self.quality):
+        for l, t in enumerate(self._quality):
             t.transforms.configure(canvas=self, viewport=vp)
-            t.pos = (self.size[0] * 0.975, ((ii + 0.5)/self.n_chan) * self.size[1])
+            t.pos = (self.size[0] * 0.975,
+                     ((l + 0.5)/self.n_lines) * self.size[1])
 
     def on_draw(self, event):
         gloo.clear()
         gloo.set_viewport(0, 0, *self.physical_size)
         self.program.draw('line_strip')
-        [t.draw() for t in self.names + self.quality]
-
-
-#class signalPlotter(Plotter)
- #   def __init__(self)
-  #  self.initialize()
-#
- #   def initialize(self):
-        #streams, figures, assign colours, choose scale
-        #prepare to take samples, know how many samples dealing with
-        #draw channel names
-  #      pass
-
-   # def _draw(self):
-        #Redraw figures with new updated information from TimeSeries
-        #show raw voltage values on graph
-    #    pass
-
-    #def _on_filter_click(self, event):
-        #redirect data to a filter function
-        #call draw function with new filtered data
-     #   pass
-
-    #def _on_mouse_wheel(self, event):
-        #rescale data (change window size)
-     #   pass
-
-    #def _mark_data(self, event):
-        #manual add of event marker to be saved for later?
-        #must call data save function to add the marker to appropriate timestamp
-     #   pass
-
-#class psdPlotter(Plotter)
- #   def __init__(self,data)
-  #  self.initialize():
-   # pass
-    #def initialize():
-        #set up view of power spectrum streaming
-        #need to know how many bands to show
-        #set up sample recieving variables
-     #   pass
-
-   # def _draw():
-        #redraw PSD spectrum when new samples come in
-
-    #    pass
-
-    #def _process_sample():
-        #call sample preprocessing function to generate frequency domain data
-     #   pass
+        for t in self._names + self._quality:
+            t.draw()

@@ -18,7 +18,7 @@ Note:
    https://github.com/sccn/labstreaminglayer
 """
 
-from wizardhat import utils, data
+from wizardhat import data
 
 from serial.serialutil import SerialException
 import threading
@@ -40,7 +40,7 @@ class LSLStreamer:
 
     """
 
-    def __init__(self, inlet=None, data=None, dejitter=True,
+    def __init__(self, inlet=None, data_=None, dejitter=True,
                  chunk_samples=12, autostart=True):
         """Instantiate LSLStreamer given length of data store in seconds.
 
@@ -71,16 +71,19 @@ class LSLStreamer:
         info = inlet.info()
         self.sfreq = info.nominal_srate()
         self.n_chan = info.channel_count()
-        self.ch_names = get_ch_names(info)
+        # self.ch_names = get_ch_names(info)
+        from ble2lsl.devices import muse
+        self.ch_names = list(muse.PARAMS['ch_names'])
+        #print(self.ch_names)
 
         # instantiate the `data.TimeSeries` instance if one is not provided
-        if data is None:
+        if data_ is None:
             metadata = {"pipeline": [type(self).__name__]}
-            self.data = data.TimeSeries(self.ch_names, self.sfreq,
-                                        metadata=metadata)
+            self.data = data.TimeSeries.with_window(self.ch_names, self.sfreq,
+                                                    metadata=metadata)
         else:
             # user-defined instance
-            self.data = data
+            self.data = data_
             # TODO: do a test update to make sure it's a TimeSeries instance
             #try:
             #    test_samples = np.zeros(0, dtype=self.data.dtype)
