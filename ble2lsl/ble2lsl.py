@@ -63,7 +63,7 @@ class OutletStreamer:
         self._time_func = time_func
 
         # construct LSL StreamInfo and StreamOutlet
-        self.info = lsl.StreamInfo(**stream_params, source_id='')
+        self.info = lsl.StreamInfo(**stream_params, source_id='MuseNone')
         self.outlet = lsl.StreamOutlet(self.info, chunk_size=chunk_size,
                                        max_buffered=360)
 
@@ -83,8 +83,7 @@ class OutletStreamer:
 
     def _push_chunk(self, channels, timestamps):
         for sample in range(self._chunk_size):
-            pass
-            #self.outlet.push_sample(channels[:, sample], timestamps[sample])
+            self.outlet.push_sample(channels[:, sample], timestamps[sample])
 
 
 class BLEStreamer(OutletStreamer):
