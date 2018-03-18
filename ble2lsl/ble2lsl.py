@@ -307,7 +307,7 @@ class DummyStreamer(OutletStreamer):
         if csv_file is None:
             self.sfreq = sfreq
             self.n_chan = n_chan
-            self._dummy_data = self.gen_fake_data(dur)
+            self._dummy_data = self.gen_dummy_data(dur)
         else:
             self.csv_file = csv_file
             # TODO:load csv file to np array
@@ -331,7 +331,7 @@ class DummyStreamer(OutletStreamer):
 
     def _stream(self):
         while self._proceed:
-            self.start_time = self.time_func()
+            self.start_time = self._time_func()
             chunk_inds = np.arange(0, len(self._dummy_data.T), self._chunk_size)
             for chunk_ind in chunk_inds:
                 self.make_chunk(chunk_ind)
@@ -346,7 +346,7 @@ class DummyStreamer(OutletStreamer):
         TODO:
             * becomes external when passing an iterator to `DummyStreamer`
         """
-        n_samples = dur * self.srate
+        n_samples = dur * self.sfreq
         x = np.arange(0, n_samples)
         a_freqs = 2 * np.pi * np.array(freqs)
         y = np.zeros((self.n_chan, len(x)))
@@ -366,7 +366,7 @@ class DummyStreamer(OutletStreamer):
         TODO:
             * replaced when using an iterator
         """
-        self._data = self._dummy_data[:,chunk_ind:chunk_ind+self.chunk_size]
+        self._data = self._dummy_data[:,chunk_ind:chunk_ind+self._chunk_size]
         # TODO: more realistic timestamps
-        timestamp = self.time_func()
-        self._timestamps = np.array([timestamp]*self.chunk_size)
+        timestamp = self._time_func()
+        self._timestamps = np.array([timestamp]*self._chunk_size)
