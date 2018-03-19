@@ -27,7 +27,7 @@ Our library provides two options when building, debugging, or testing your BCI c
 1) Streaming data from Muse or other EEG device
 2) Streaming randomly generated data for testing and debugging
 
-To begin streaming, you will need first to import `ble2lsl` and `wizardhat.acquire` into your Python workspace. The BLE device parameters for different devices (currently, only Muse 2016) are stored in `ble2lsl.devices`.
+To begin streaming, you will need first to import `ble2lsl` and `wizardhat.acquire` into your Python workspace. The BLE device parameters for different devices (currently, only Muse 2016) are stored in respective modules in `ble2lsl.devices`.
         
 	import ble2lsl
 	from ble2lsl.devices import muse2016
@@ -72,4 +72,4 @@ Chris,
 Hamada
 
 ## Acknowledgements 
-This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are derived or informed (particularly ble2lsl, wizardhat.plot, and some of wizardhat.acquire). When we first got started with the Muse, we were inspired to modify his work to fit our needs. We wanted to generalize his work into an API for the sake of modularity and flexibility, so that it might be as broadly useful as possible to those working on BCI and EEG related work.
+This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are derived or informed (particularly ble2lsl, wizardhat.plot, and some of wizardhat.acquire). When we first got started with the Muse, we were inspired to modify his work to fit our needs. We wanted to generalize his work into an API for the sake of modularity and flexibility, so that it might be as broadly useful as possible to those doing BCI- and EEG-related work.
