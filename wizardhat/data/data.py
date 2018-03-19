@@ -184,7 +184,7 @@ class Data:
         mask = {'_lock': threading.Lock(),
                 'updated': threading.Event(),
                 'filename': self._new_filename(self._data_dir, self._label)}
-        return utils.deepcopy_mask(self, mask, memo)
+        return utils.deepcopy_mask(self, memo, mask)
 
 
 class TimeSeries(Data):
@@ -224,6 +224,7 @@ class TimeSeries(Data):
         try:
             self._dtype = np.dtype({'names': ["time"] + ch_names,
                                     'formats': [np.float64] + channel_fmt})
+            print(self._dtype)
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
@@ -301,6 +302,7 @@ class TimeSeries(Data):
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         stacked = [(t,) + tuple(s) for t, s in zip(timestamps, samples)]
+        print(stacked)
         return np.array(stacked, dtype=self._dtype)
 
     @property
@@ -326,7 +328,13 @@ class TimeSeries(Data):
     def samples(self):
         """Return copy of channel data, without timestamps."""
         with self._lock:
-            return np.copy(self.data[self.ch_names])
+            return np.copy(self._data[list(self.ch_names)])
+
+    @property
+    def timestamps(self):
+        """Return copy of timestamps."""
+        with self._lock:
+            return np.copy(self._data['time'])
 
     @property
     def last(self):

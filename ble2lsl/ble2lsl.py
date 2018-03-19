@@ -47,7 +47,7 @@ class OutletStreamer:
         * Some way to generalize autostart behaviour?
     """
 
-    def __init__(self, stream_params=None, chunk_size=12,
+    def __init__(self, device_params=None, stream_params=None, chunk_size=12,
                  time_func=time.time):
         """Construct an `OutletStreamer` object.
 
@@ -56,6 +56,9 @@ class OutletStreamer:
             chunk_size (int): Number of samples pushed per LSL chunk.
             time_func (function): Function for generating timestamps.
         """
+        if device_params is None:
+            device_params = {}
+        self._device_params = device_params
         if stream_params is None:
             stream_params = {}
         self._stream_params = stream_params
@@ -84,6 +87,18 @@ class OutletStreamer:
     def _push_chunk(self, channels, timestamps):
         for sample in range(self._chunk_size):
             self.outlet.push_sample(channels[:, sample], timestamps[sample])
+
+    def _add_device_info(self):
+        """Adds device-specific parameters to `info`."""
+        self.info.desc().append_child_value("manufacturer",
+                                            self._device_params["manufacturer"])
+
+        self.channels = self.info.desc().append_child("channels")
+        for ch_name in self._device_params["ch_names"]:
+            self.channels.append_child("channel") \
+                .append_child_value("label", ch_name) \
+                .append_child_value("unit", self._device_params["units"]) \
+                .append_child_value("type", self._stream_params["type"])
 
 
 class BLEStreamer(OutletStreamer):
@@ -117,8 +132,7 @@ class BLEStreamer(OutletStreamer):
                 When `backend='gatt'`, defaults to `'hci0'`.
             autostart (bool): Whether to start streaming on instantiation.
         """
-        OutletStreamer.__init__(self, **kwargs)
-        self._device_params = device_params
+        OutletStreamer.__init__(self, device_params=device_params, **kwargs)
         self.address = address
 
         # initialize gatt adapter
@@ -208,18 +222,6 @@ class BLEStreamer(OutletStreamer):
         for uuid in self._device_params["ch_uuids"]:
             self._device.subscribe(uuid, callback=self._transmit_packet)
 
-    def _add_device_info(self):
-        """Adds device-specific parameters to `info`."""
-        self.info.desc().append_child_value("manufacturer",
-                                            self._device_params["manufacturer"])
-
-        self.channels = self.info.desc().append_child("channels")
-        for ch_name in self._device_params["ch_names"]:
-            self.channels.append_child("channel") \
-                .append_child_value("label", ch_name) \
-                .append_child_value("unit", self._device_params["units"]) \
-                .append_child_value("type", self._stream_params["type"])
-
     def _resolve_address(self, name):
         list_devices = self._adapter.scan(timeout=10.5)
         for device in list_devices:
@@ -298,6 +300,16 @@ class DummyStreamer(OutletStreamer):
         Attributes:
 
         """
+        if 'device_params' not in kwargs:
+            device_params = {'ch_names': [''] * n_chan}
+
+        if 'stream_params' not in kwargs:
+            kwargs['stream_params'] = {'name': 'Dummy',
+                                       'type': 'EEG',
+                                       'channel_count': n_chan,
+                                       'nominal_srate': sfreq,
+                                       'channel_format': 'float32'}
+
         OutletStreamer.__init__(self, **kwargs)
 
         self._thread = threading.Thread(target=self._stream)

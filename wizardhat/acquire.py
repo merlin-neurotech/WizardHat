@@ -71,10 +71,11 @@ class LSLStreamer:
         info = inlet.info()
         self.sfreq = info.nominal_srate()
         self.n_chan = info.channel_count()
-        # self.ch_names = get_ch_names(info)
-        from ble2lsl.devices import muse
-        self.ch_names = list(muse.PARAMS['ch_names'])
-        #print(self.ch_names)
+        if info.name() == 'Muse2016':
+            from ble2lsl.devices import muse2016
+            self.ch_names = list(muse2016.PARAMS['ch_names'])
+        else:
+            self.ch_names = get_ch_names(info)
 
         # instantiate the `data.TimeSeries` instance if one is not provided
         if data_ is None:

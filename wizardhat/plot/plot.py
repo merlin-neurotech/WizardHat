@@ -4,6 +4,7 @@
 
 from wizardhat.plot import shaders
 
+from itertools import cycle
 import math
 
 import numpy as np
@@ -12,20 +13,53 @@ from vispy import gloo, app, visuals
 
 
 class Plotter(app.Canvas):
-    """ """
+    """Base class for plotting."""
     def __init__(self, data, plot_params=None):
+        """Construct a `Plotter` instance.
+        
+        Args:
+            data (data.Data): Data object managing data to be plotted.
+            plot_params (dict): Plot display parameters.
+        """
         app.Canvas.__init__(self, keys='interactive')
-
         self.data = data
 
 
 class Lines(Plotter):
+    """
+
+
+    TODO:
+        * switch between different data sources with keyboard
+    """
     def __init__(self, data, plot_params=None, **kwargs):
+        """Construct a `Lines` instance.
+        
+        Args:
+            data (data.Data or List[data.Data]): Data object(s) managing data 
+                to be plotted. Multiple objects may be passed in a list, in 
+                which case the plot can cycle through plotting the data in 
+                each object by pressing 'd'. However, all data objects passed
+                should have a similar form (e.g. `TimeSeries` with same number
+                of rows/samples and channels).
+                
+            plot_params (dict): Plot display parameters.
+        """
         super().__init__(data, plot_params=plot_params, **kwargs)
 
-        self.n_lines = self.data.n_chan
-        self.n_points = self.data.n_samples
+        try:
+            self.data.ch_names
+            self.data = [self.data]
+        except AttributeError:
+            pass
+        
+        self._cycle = cycle(range(len(self.data)))
+        self._data = self.data[next(self._cycle)]
+    
+        self._n_lines = self._data.n_chan
+        self._n_points = self._data.n_samples
 
+        # plotting parameters (color, font size, etc.)
         if plot_params is None:
             plot_params = {}
         try:
@@ -33,7 +67,7 @@ class Lines(Plotter):
                 title='Plotter',
                 font_size=48,
                 scale=500,
-                palette=color_palette("RdBu_r", self.n_lines),
+                palette=color_palette("RdBu_r", self._n_lines),
                 quality_palette=color_palette("RdYlGn", 11)[::-1],
             )
             self.params.update(plot_params)
@@ -41,15 +75,15 @@ class Lines(Plotter):
             raise TypeError("plot_params not a dict or key-value pairs list")
 
         color = np.repeat(self.params['palette'],
-                          self.n_points, axis=0).astype(np.float32)
+                          self._n_points, axis=0).astype(np.float32)
 
         self._set_program_params(color)
 
         # text
         self._names = [visuals.TextVisual(ch_name, bold=True, color='white')
-                       for ch_name in self.data.ch_names]
+                       for ch_name in self._data.ch_names]
         self._quality = [visuals.TextVisual('', bold=True, color='white')
-                         for ch_name in self.data.ch_names]
+                         for ch_name in self._data.ch_names]
 
         self._init_plot()
 
@@ -57,23 +91,23 @@ class Lines(Plotter):
 
         # Signal 2D index of each vertex (row and col) and x-index (sample
         # index within each signal).
-        index = np.c_[np.repeat(np.repeat(np.arange(1), self.n_lines),
-                                self.n_points),
-                      np.repeat(np.tile(np.arange(self.n_lines), 1),
-                                self.n_points),
-                      np.tile(np.arange(self.n_points),
-                              self.n_lines)].astype(np.float32)
+        index = np.c_[np.repeat(np.repeat(np.arange(1), self._n_lines),
+                                self._n_points),
+                      np.repeat(np.tile(np.arange(self._n_lines), 1),
+                                self._n_points),
+                      np.tile(np.arange(self._n_points),
+                              self._n_lines)].astype(np.float32)
 
-        position = np.zeros((self.n_lines,
-                             self.n_points)).astype(np.float32).reshape(-1, 1)
+        position = np.zeros((self._n_lines,
+                             self._n_points)).astype(np.float32).reshape(-1, 1)
 
         self.program = gloo.Program(shaders.VERT_SHADER, shaders.FRAG_SHADER)
         self.program['a_position'] = position
         self.program['a_color'] = color
         self.program['a_index'] = index
         self.program['u_scale'] = (1., 1.)
-        self.program['u_size'] = (self.n_lines, 1)
-        self.program['u_n'] = self.n_points
+        self.program['u_size'] = (self._n_lines, 1)
+        self.program['u_n'] = self._n_points
 
     def _init_plot(self):
         self._timer = app.Timer('auto', connect=self.update_plot, start=True)
@@ -84,7 +118,11 @@ class Lines(Plotter):
         self.show()
 
     def on_key_press(self, event):
-        # increase time scale
+        # cycle through available data sources
+        if event.key.name == 'D':
+            self._data = self.data[next(self._cycle)]
+        
+        # time scale
         if event.key.name in ['+', '-']:
             if event.key.name == '+':
                 dx = -0.05
@@ -93,7 +131,8 @@ class Lines(Plotter):
             scale_x, scale_y = self.program['u_scale']
             scale_x_new, scale_y_new = (scale_x * math.exp(1.0*dx),
                                         scale_y * math.exp(0.0*dx))
-            self.program['u_scale'] = (max(1, scale_x_new), max(1, scale_y_new))
+            self.program['u_scale'] = (max(1, scale_x_new), 
+                                       max(1, scale_y_new))
             self.update()
 
     def on_mouse_wheel(self, event):
@@ -105,14 +144,14 @@ class Lines(Plotter):
         self.update()
 
     def update_plot(self, data):
-        plot_data = self.data.unstructured[:, 1:]
+        plot_data = self._data.unstructured[:, 1:]
         plot_data = (plot_data - plot_data.mean(axis=0)) / self.params['scale']
         sd = np.std(plot_data[-int(256):], axis=0)[::-1]
-        #sd = np.std(plot_data[-int(self.data.sfreq):], axis=0)[::-1]
+        #sd = np.std(plot_data[-int(self._data.sfreq):], axis=0)[::-1]
         sd *= self.params['scale']
         co = np.int32(np.tanh((sd - 30) / 15)*5 + 5)
 
-        for l in range(self.n_lines):
+        for l in range(self._n_lines):
             self._quality[l].text = '%.2f' % (sd[l])
             self._quality[l].color = self.params['quality_palette'][co[l]]
             self._quality[l].font_size = 12 + co[l]
@@ -132,12 +171,12 @@ class Lines(Plotter):
         for l, t in enumerate(self._names):
             t.transforms.configure(canvas=self, viewport=vp)
             t.pos = (self.size[0] * 0.025,
-                     ((l + 0.5)/self.n_lines) * self.size[1])
+                     ((l + 0.5)/self._n_lines) * self.size[1])
 
         for l, t in enumerate(self._quality):
             t.transforms.configure(canvas=self, viewport=vp)
             t.pos = (self.size[0] * 0.975,
-                     ((l + 0.5)/self.n_lines) * self.size[1])
+                     ((l + 0.5)/self._n_lines) * self.size[1])
 
     def on_draw(self, event):
         gloo.clear()

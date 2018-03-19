@@ -23,7 +23,7 @@ PARAMS = dict(
 
 
 STREAM_PARAMS = dict(
-    name='Muse',
+    name='Muse2016',
     type='EEG',
     channel_count=5,
     nominal_srate=256,
