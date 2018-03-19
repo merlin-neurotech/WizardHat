@@ -1,6 +1,8 @@
 # WizardHat
 
-WizardHat is library for the streaming and handling of EEG data from consumer-grade devices using the Lab Streaming Layer (LSL) protocol. WizardHat's prupose is to enable users to flexibly build brain-computer interfaces (BCIs) without the fuss of configuring a streaming environment. Currently, WizardHat supports the Muse (2016) brain-sensing headband and runs on Python 3.6. WizardHat is easy to use and only requires three lines of code to get started. WizardHat's framework enables streaming, manipulation, and visualization of online EEG data. 
+WizardHat is library for the streaming and handling of EEG data from consumer-grade devices using the Lab Streaming Layer (LSL) protocol. WizardHat's prupose is to enable users and especially first timers to flexibly build brain-computer interfaces (BCIs) without the fuss of configuring a streaming environment. WizardHat was built by Merlin Neurotech at Queen's University. Currently, WizardHat supports the Muse (2016) brain-sensing headband and runs on Python 3.6. WizardHat is easy to use and only requires three lines of code to get started. WizardHat's framework enables streaming, manipulation, and visualization of online EEG data. 
+
+For first time python users, please refer to our [beginner's guide](https://docs.google.com/document/d/1q9CNgSgUsNCRasLZtZ7D-2JpB7OcNvSsS3X1a1zHK-U/edit?usp=sharing) on how to set install everything from scratch. WizardHat's documentation can be found [here](https://docs.google.com/document/d/1dOymsVdVxN3SgN3mRIzHV1xmjpIjEvz5QSDIQ66D6To/edit?usp=sharing).
 
 ## Getting Started
 
