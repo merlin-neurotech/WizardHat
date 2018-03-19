@@ -10,7 +10,6 @@ import copy
 import threading
 
 import mne
-from mne.preprocessing import ICA
 import numpy as np
 
 
@@ -43,7 +42,7 @@ class MNETransformer(Transformer):
     def __init__(self, data_in, sfreq, source_type='eeg', scaling=1E6,
                  montage='standard_1020'):
         """Construct an `MNETransformer` instance.
-        
+
         Args:
             data_in (data.TimeSeries): Input time series data.
             sfreq (int): Nominal sampling frequency of the time series.
@@ -87,12 +86,13 @@ class MNETransformer(Transformer):
         samples *= self.scaling
         return samples
 
+
 class MNEFilter(MNETransformer):
     """Apply MNE filters to TimeSeries data objects."""
 
     def __init__(self, data_in, l_freq, h_freq, sfreq, update_interval=10):
         """Construct an `MNEFilter` instance.
-        
+
         Args:
             data_in (data.TimeSeries): Input time series.
             l_freq (float): Low-frequency cutoff.
@@ -103,12 +103,12 @@ class MNEFilter(MNETransformer):
         """
         MNETransformer.__init__(self, data_in=data_in, sfreq=sfreq)
         self.similar_output()
-        
+
         self._band = (l_freq, h_freq)
 
         self._update_interval = update_interval
         self._count = 0
-        self._proceed = True        
+        self._proceed = True
         self.start()
 
     def run(self):
@@ -120,53 +120,13 @@ class MNEFilter(MNETransformer):
             if self._count == self._update_interval:
                 data = self.data_in.unstructured
                 timestamps, samples = data[:, 1], data[:, 1:]
-                filtered = mne.filter.filter_data(samples.T, self._sfreq, 
+                filtered = mne.filter.filter_data(samples.T, self._sfreq,
                                                   *self._band)
                 #samples_mne = self._to_mne_array(samples)
                 #filtered_mne = samples_mne.filter(*self._band)
                 #filtered = self._from_mne_array(filtered_mne)
-                self.data_out.update(timestamps, filtered.T)   
+                self.data_out.update(timestamps, filtered.T)
                 self._count = 0
 
     def stop(self):
         self._proceed = False
-
-
-class ICAClean(MNETransformer):
-
-    def __init__(self, data_in, ica_samples=1024, ica_freq=64,
-                 method='fastica', n_exclude=1, filter_=False,
-                 montage='standard_1020', autostart=True, **kwargs):
-
-        MNETransformer.__init__(self, data_in=data_in, montage=montage)
-
-        # output is similar to input
-        self.similar_output()
-        # ... but could be longer depending on ica_samples
-        n_samples = max(ica_samples, self.data_in.n_samples)
-        self.data_out.initialize(n_samples)
-
-        self.ica = ICA(n_components=len(self.data_out.ch_names), method=method,
-                       **kwargs)
-        self.filter_ = filter_
-        self.n_exclude = n_exclude
-
-        self.proceed = True
-        if autostart:
-            self.start()
-
-    def run(self):
-        excludes = list(range(self.n_exclude))
-        while self.proceed:
-            if True: #TODO: count condition
-                # TODO: exclude 'time': only EEG channels
-                samples_mne = self._to_mne_array(self.data_in.data)
-                if self.filter_:
-                    samples_mne.filter(1.0, 100.0)
-                self.ica_fit(samples_mne, picks=self.picks)
-
-                samples_mne_cleaned = self.ica.apply(samples_mne,
-                                                     exclude=excludes)
-                samples_cleaned = self._from_mne_array(samples_mne_cleaned)
-
-                self.data_out.update(samples_cleaned)

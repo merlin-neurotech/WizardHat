@@ -1,6 +1,4 @@
-"""
-
-"""
+"""Plotting of data in `data.Data` objects."""
 
 from wizardhat.plot import shaders
 
@@ -16,7 +14,7 @@ class Plotter(app.Canvas):
     """Base class for plotting."""
     def __init__(self, data, plot_params=None):
         """Construct a `Plotter` instance.
-        
+
         Args:
             data (data.Data): Data object managing data to be plotted.
             plot_params (dict): Plot display parameters.
@@ -26,23 +24,26 @@ class Plotter(app.Canvas):
 
 
 class Lines(Plotter):
-    """
+    """Multiple (stacked) line plots.
 
+    Expects a two-dimensional `data.Data` object (such as `TimeSeries`) where
+    all columns after the first give the data used to plot individual lines.
 
-    TODO:
-        * switch between different data sources with keyboard
+    Multiple data sources may be given in a list, assuming they have the same
+    form (number of channels and rows/samples); the user can cycle between
+    plots of each data source with the 'D' key.
     """
     def __init__(self, data, plot_params=None, **kwargs):
         """Construct a `Lines` instance.
-        
+
         Args:
-            data (data.Data or List[data.Data]): Data object(s) managing data 
-                to be plotted. Multiple objects may be passed in a list, in 
-                which case the plot can cycle through plotting the data in 
+            data (data.Data or List[data.Data]): Data object(s) managing data
+                to be plotted. Multiple objects may be passed in a list, in
+                which case the plot can cycle through plotting the data in
                 each object by pressing 'd'. However, all data objects passed
                 should have a similar form (e.g. `TimeSeries` with same number
                 of rows/samples and channels).
-                
+
             plot_params (dict): Plot display parameters.
         """
         super().__init__(data, plot_params=plot_params, **kwargs)
@@ -52,10 +53,10 @@ class Lines(Plotter):
             self.data = [self.data]
         except AttributeError:
             pass
-        
+
         self._cycle = cycle(range(len(self.data)))
         self._data = self.data[next(self._cycle)]
-    
+
         self._n_lines = self._data.n_chan
         self._n_points = self._data.n_samples
 
@@ -121,7 +122,7 @@ class Lines(Plotter):
         # cycle through available data sources
         if event.key.name == 'D':
             self._data = self.data[next(self._cycle)]
-        
+
         # time scale
         if event.key.name in ['+', '-']:
             if event.key.name == '+':
@@ -131,7 +132,7 @@ class Lines(Plotter):
             scale_x, scale_y = self.program['u_scale']
             scale_x_new, scale_y_new = (scale_x * math.exp(1.0*dx),
                                         scale_y * math.exp(0.0*dx))
-            self.program['u_scale'] = (max(1, scale_x_new), 
+            self.program['u_scale'] = (max(1, scale_x_new),
                                        max(1, scale_y_new))
             self.update()
 
