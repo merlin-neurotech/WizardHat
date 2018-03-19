@@ -27,31 +27,31 @@ Our library provides two options when building, debugging, or testing your BCI c
 1) Streaming data from Muse or other EEG device
 2) Streaming randomly generated data for testing and debugging
 
-To begin streaming, you will need first to import WizardHat into your Python workspace.
-
-	import wizardhat as wiz
+To begin streaming, you will need first to import `ble2lsl` and `wizardhat.acquire` into your Python workspace. The BLE device parameters for different devices (currently, only Muse 2016) are stored in `ble2lsl.devices`.
+        
+	import ble2lsl
+	from ble2lsl.devices import muse2016
+	from wizardhat import acquire
 
 You then need to create a streaming outlet which establishes a bluetooth connection with the EEG device:
 
-	outlet = wiz.ble2lsl.LSLOutletStreamer()
+	outlet = ble2lsl.BLEStreamer(muse2016)
 
-To stream dummy data:
+To stream dummy data through an outlet that mimics (number of channels, sample rate, and metadata) the Muse 2016 
 
-	dummy_outlet = wiz.ble2lsl.LSLOutletDummy()
-
-You should then see a "Connected" message printed to your console indicating that either the EEG device or the dummy outlet are streaming data.
+	dummy_outlet = ble2lsl.DummyStreamer(muse2016)
 
 Next, to store and record the data, add the following line to capture the outlet stream:
 
-	streamer_inlet = acquire.LSLStreamer()
+	streamer = acquire.LSLStreamer()
 
-Notice how you do not need to pass the outlet streamer as an argument to this function, as LSLStreamer automatically finds and connects to this stream.
+Notice how you do not need to pass the outlet streamer as an argument to this function. LSL can stream over a local network, and `ble2lsl` need not be run in the same process as `wizardhat`. LSLStreamer automatically finds and connects to the LSL outlet. (More work is needed to allow LSLStreamer to distinguish multiple outlets, when they are available.)
 
-Now that your streamer is is receiving data, you are able to visualize and manipulate it online within a time window of your choosing (defaults to 10). The data object is a structured array with timestamps as the first column, and EEG channel data values as the following columns. It contains both raw values and metadata regarding the device in use. To view this
+Now that your streamer is is receiving data, you are able to visualize and manipulate it online. The data object is a structured array with timestamps as the first column, and EEG channel data values as the following columns. It contains both raw values and metadata regarding the device in use. The current copy of the stored data is in
 
-	print(streamer_inlet.data.data)
+	streamer_inlet.data.data
 
-After each time window, data is saved to a CSV file in your directory under a folder called 'data' and is constantly updated while your stream is running. Each new streaming session you establish will create a new CSV file. 
+After each time window, data is saved to a CSV file in your directory under a folder called 'data' and is constantly updated while your stream is running. Each new streaming session (specifically, data object) you establish will create a new CSV file, accompanied by a JSON file of the same named containing the stream metadata.
 
 These are the basics of WizardHat; to learn how to transform, filter, and visualize the data on a graph, refer to the [WizardHat documentation](https://docs.google.com/document/d/1dOymsVdVxN3SgN3mRIzHV1xmjpIjEvz5QSDIQ66D6To/edit?usp=sharing).
 
@@ -63,13 +63,13 @@ Ben Cuthbert,
 Omri Nachmani
 
 ## Contributors 
-Abigail
-Jorge
-Dan
-Colton
-Teghan
-Chris
+Abigail,
+Jorge,
+Dan,
+Colton,
+Teghan,
+Chris,
 Hamada
 
 ## Acknowledgements 
-This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are heavily derived or informed (particularly ble2lsl and wizardhat.acquire). When we first got started with the Muse, we were inspired to modify his work to fit our needs. As our project grew larger and larger we came to realize it can now be considered an independent library that may be of use to others who are working on BCI and EEG related work.
+This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are derived or informed (particularly ble2lsl, wizardhat.plot, and some of wizardhat.acquire). When we first got started with the Muse, we were inspired to modify his work to fit our needs. We wanted to generalize his work into an API for the sake of modularity and flexibility, so that it might be as broadly useful as possible to those working on BCI and EEG related work.
