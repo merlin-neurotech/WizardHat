@@ -25,6 +25,7 @@ import time
 import bitstring
 import numpy as np
 import pygatt
+from pygatt.backends.bgapi.exceptions import ExpectedResponseTimeout
 import pylsl as lsl
 import threading
 
@@ -206,7 +207,14 @@ class BLEStreamer(OutletStreamer):
         connects to the device, and subscribes to the channels specified in the
         device parameters.
         """
-        self._adapter.start()
+        adapter_started = False
+        while not adapter_started:
+            try:
+                self._adapter.start()
+                adapter_started = True
+            except ExpectedResponseTimeout:
+                continue
+
         if self.address is None:
             # get the device address if none was provided
             self.address = self._resolve_address(self._stream_params["name"])
