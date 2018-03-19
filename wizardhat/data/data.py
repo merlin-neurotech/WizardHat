@@ -224,7 +224,6 @@ class TimeSeries(Data):
         try:
             self._dtype = np.dtype({'names': ["time"] + ch_names,
                                     'formats': [np.float64] + channel_fmt})
-            print(self._dtype)
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
@@ -302,7 +301,6 @@ class TimeSeries(Data):
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         stacked = [(t,) + tuple(s) for t, s in zip(timestamps, samples)]
-        print(stacked)
         return np.array(stacked, dtype=self._dtype)
 
     @property

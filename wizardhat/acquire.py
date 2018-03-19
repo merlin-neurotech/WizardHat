@@ -71,7 +71,7 @@ class LSLStreamer:
         info = inlet.info()
         self.sfreq = info.nominal_srate()
         self.n_chan = info.channel_count()
-        if info.name() == 'Muse2016':
+        if info.name() == 'Muse':
             from ble2lsl.devices import muse2016
             self.ch_names = list(muse2016.PARAMS['ch_names'])
         else:
