@@ -281,13 +281,19 @@ class TimeSeries(Data):
         self._split_append(new)
         self.updated.set()
 
-    def write_to_file(self):
-        """Write all unwritten samples to file."""
-        with self._lock:
-            with open(self.filename + ".csv", 'a') as f:
-                for row in self._data[max(0, self._count):]:
-                    line = ','.join(str(n) for n in row)
-                    f.write(line + '\n')
+    def write_to_file(self, force=False):
+        """Write any unwritten samples to file.
+
+        Args:
+            force (bool): If `True`, forces writing of remaining samples
+                regardless of the value of `record` passed at instantiation.
+        """
+        if self._record or force:
+            with self._lock:
+                with open(self.filename + ".csv", 'a') as f:
+                    for row in self._data[max(0, self._count):]:
+                        line = ','.join(str(n) for n in row)
+                        f.write(line + '\n')
         self._count = self.n_samples
 
     def _split_append(self, new):
@@ -297,11 +303,7 @@ class TimeSeries(Data):
         cutoff = self._count
         self._append(new[:cutoff])
         if self._count == 0:
-            if self._record:
-                self.write_to_file()
-            else:
-                # TODO: private _write_to_file to prevent repeating this?
-                self._count = self.n_samples
+            self.write_to_file()
             self._append(new[cutoff:])
 
     def _append(self, new):
