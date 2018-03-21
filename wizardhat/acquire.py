@@ -140,6 +140,10 @@ class LSLStreamer:
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
 
+        finally:
+            # write any remaining samples in `self.data` to file
+            self.data.write_to_file()
+
     def _new_thread(self):
         # break loop in `stream` to cause thread to return
         self._proceed = False

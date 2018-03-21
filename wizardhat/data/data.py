@@ -275,28 +275,33 @@ class TimeSeries(Data):
                 in `dtype`.
         """
         new = self._format_samples(timestamps, samples)
+        self._split_append(new)
+        self.updated.set()
 
+    def _split_append(self, new):
         self._count -= len(new)
+        # write out each time array contains only unwritten samples
+        # however, last chunk added may push out some unwritten samples
+        # therefore split appends before and after write_to_file
         cutoff = len(new) + self._count
         self._append(new[:cutoff])
         if self._count < 1:
             if self._record:
-                self._write_to_file()
+                self.write_to_file()
             self._append(new[cutoff:])
             self._count = self.n_samples
 
-        self.updated.set()
+    def write_to_file(self):
+        """Write all unwritten samples to file."""
+        with self._lock:
+            with open(self.filename + ".csv", 'a') as f:
+                for row in self._data[max(0, self._count):]:
+                    line = ','.join(str(n) for n in row)
+                    f.write(line + '\n')
 
     def _append(self, new):
         with self._lock:
             self._data = utils.push_rows(self._data, new)
-
-    def _write_to_file(self):
-        with self._lock:
-            with open(self.filename + ".csv", 'a') as f:
-                for row in self._data:
-                    line = ','.join(str(n) for n in row)
-                    f.write(line + '\n')
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
