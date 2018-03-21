@@ -293,70 +293,53 @@ class DummyStreamer(OutletStreamer):
     """Streams data over an LSL outlet from a local source.
 
     Attributes:
-        sfreq (int): Sampling frequency for generated data.
-        n_chan (int): Number of channels of generated data.
         csv_file (str): Filename of `.csv` containing local data.
 
     TODO:
-        * take a data iterator instead of multiple optional parameters
+        * take a data iterator instead of CSV file/single random generator
+        * implement CSV file streaming
     """
 
-    def __init__(self, dummy_func=None, dur=60, sfreq=256, n_chan=4,
-                 csv_file=None, autostart=True, **kwargs):
+    def __init__(self, device, dur=60, csv_file=None, autostart=True,
+                 **kwargs):
         """Construct a `DummyStreamer` instance.
 
         Attributes:
-
+            device: BLE device to impersonate (i.e. from `ble2lsl.devices`).
+            dur (float): Duration of random data to generate and stream.
+                The generated data is streamed on a loop.
+            csv_file (str): CSV file containing pre-generated data to stream.
+            autostart (bool): Whether to start streaming on instantiation.
         """
-        if 'device_params' not in kwargs:
-            device_params = {'ch_names': [''] * n_chan}
 
-        if 'stream_params' not in kwargs:
-            kwargs['stream_params'] = {'name': 'Dummy',
-                                       'type': 'EEG',
-                                       'channel_count': n_chan,
-                                       'nominal_srate': sfreq,
-                                       'channel_format': 'float32'}
-
-        OutletStreamer.__init__(self, **kwargs)
+        OutletStreamer.__init__(self, device_params=device.PARAMS,
+                                stream_params=device.STREAM_PARAMS, **kwargs)
 
         self._thread = threading.Thread(target=self._stream)
 
         # generate or load fake data
         if csv_file is None:
-            self.sfreq = sfreq
-            self.n_chan = n_chan
+            self._sfreq = device.STREAM_PARAMS['nominal_srate']
+            self._n_chan = device.STREAM_PARAMS['channel_count']
             self._dummy_data = self.gen_dummy_data(dur)
         else:
             self.csv_file = csv_file
-            # TODO:load csv file to np array
+            # TODO: load csv file to np array
 
         self._proceed = True
         if autostart:
             self._thread.start()
 
-    @classmethod
-    def impersonate_device(cls, device, **kwargs):
-        """Construct a `DummyStreamer` instance to mimic a device's metadata.
-
-        Args:
-            device: A device module from `ble2lsl.devices`.
-        """
-        return cls(sfreq=device.STREAM_PARAMS['nominal_srate'],
-                   n_chan=device.STREAM_PARAMS['channel_count'],
-                   device_params=device.PARAMS,
-                   stream_params=device.STREAM_PARAMS,
-                   **kwargs)
-
     def _stream(self):
         while self._proceed:
             self.start_time = self._time_func()
-            chunk_inds = np.arange(0, len(self._dummy_data.T), self._chunk_size)
+            chunk_inds = np.arange(0, len(self._dummy_data.T),
+                                   self._chunk_size)
             for chunk_ind in chunk_inds:
                 self.make_chunk(chunk_ind)
                 self._push_chunk(self._data, self._timestamps)
                 # force sampling rate
-                sec_per_chunk = 1 / (self.sfreq / self._chunk_size)
+                sec_per_chunk = 1 / (self._sfreq / self._chunk_size)
                 time.sleep(sec_per_chunk)
 
     def gen_dummy_data(self, dur, freqs=[5, 10, 12, 20]):
@@ -365,16 +348,16 @@ class DummyStreamer(OutletStreamer):
         TODO:
             * becomes external when passing an iterator to `DummyStreamer`
         """
-        n_samples = dur * self.sfreq
+        n_samples = dur * self._sfreq
         x = np.arange(0, n_samples)
         a_freqs = 2 * np.pi * np.array(freqs)
-        y = np.zeros((self.n_chan, len(x)))
+        y = np.zeros((self._n_chan, len(x)))
 
         # sum frequencies with random amplitudes
         for freq in a_freqs:
             y += np.random.randint(1,5) * np.sin(freq * x)
 
-        noise = np.random.normal(0, 1, (self.n_chan, n_samples))
+        noise = np.random.normal(0, 1, (self._n_chan, n_samples))
         dummy_data = y + noise
 
         return dummy_data
