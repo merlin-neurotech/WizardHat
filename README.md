@@ -39,7 +39,7 @@ You then need to create a streaming outlet which establishes a bluetooth connect
 
 To stream dummy data through an outlet that mimics (number of channels, sample rate, and metadata) the Muse 2016 
 
-	dummy_outlet = ble2lsl.DummyStreamer.from_device(muse2016)
+	dummy_outlet = ble2lsl.DummyStreamer(muse2016)
 
 Next, to store and record the data, add the following line to capture the outlet stream:
 
