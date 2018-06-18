@@ -9,6 +9,7 @@ interface methods are defined in that subclass.
 
 import wizardhat.utils as utils
 
+import atexit
 import datetime
 import json
 import os
@@ -197,7 +198,6 @@ class TimeSeries(Data):
 
     TODO:
         * Warning (error?) when timestamps are out of order
-        * Record to disk on stopping
     """
 
     def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
@@ -228,6 +228,9 @@ class TimeSeries(Data):
             raise ValueError("Number of formats must match number of channels")
 
         self._record = record
+        # write remaining data to file on program exit (e.g. quit())
+        if record:
+            atexit.register(self.write_to_file)
 
         self.initialize(int(n_samples))
 
@@ -275,28 +278,38 @@ class TimeSeries(Data):
                 in `dtype`.
         """
         new = self._format_samples(timestamps, samples)
-
-        self._count -= len(new)
-        cutoff = len(new) + self._count
-        self._append(new[:cutoff])
-        if self._count < 1:
-            if self._record:
-                self._write_to_file()
-            self._append(new[cutoff:])
-            self._count = self.n_samples
-
+        self._split_append(new)
         self.updated.set()
+
+    def write_to_file(self, force=False):
+        """Write any unwritten samples to file.
+
+        Args:
+            force (bool): If `True`, forces writing of remaining samples
+                regardless of the value of `record` passed at instantiation.
+        """
+        if self._record or force:
+            with self._lock:
+                with open(self.filename + ".csv", 'a') as f:
+                    for row in self._data[max(0, self._count):]:
+                        line = ','.join(str(n) for n in row)
+                        f.write(line + '\n')
+        self._count = self.n_samples
+
+    def _split_append(self, new):
+        # write out each time array contains only unwritten samples
+        # however, last chunk added may push out some unwritten samples
+        # therefore split appends before and after write_to_file
+        cutoff = self._count
+        self._append(new[:cutoff])
+        if self._count == 0:
+            self.write_to_file()
+            self._append(new[cutoff:])
 
     def _append(self, new):
         with self._lock:
             self._data = utils.push_rows(self._data, new)
-
-    def _write_to_file(self):
-        with self._lock:
-            with open(self.filename + ".csv", 'a') as f:
-                for row in self._data:
-                    line = ','.join(str(n) for n in row)
-                    f.write(line + '\n')
+        self._count -= len(new)
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""

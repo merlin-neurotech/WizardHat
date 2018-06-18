@@ -41,14 +41,14 @@ class LSLStreamer:
     """
 
     def __init__(self, inlet=None, data_=None, dejitter=True,
-                 chunk_samples=12, autostart=True):
+                 chunk_samples=12, autostart=True, **kwargs):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
             inlet (pylsl.StreamInlet): The LSL inlet from which to stream data.
                 By default, this is created by resolving an available LSL
                 stream through a call to `get_lsl_inlet`.
-            data (data.TimeSeries): Object in which the incoming data is
+            data_ (data.TimeSeries): Object in which the incoming data is
                 stored, and that manages writing of data to disk. By default,
                 this is instantiated based on the channel names and nominal
                 sampling frequency provided by the LSL inlet.
@@ -60,6 +60,7 @@ class LSLStreamer:
             chunk_samples (int): Maximum number of samples per chunk pulled
                 from the inlet.
             autostart (bool): Whether to start streaming on instantiation.
+            kwargs: Additional keyword arguments to default `data.TimeSeries`.
 
         """
         # resolve LSL stream if necessary
@@ -80,8 +81,10 @@ class LSLStreamer:
         # instantiate the `data.TimeSeries` instance if one is not provided
         if data_ is None:
             metadata = {"pipeline": [type(self).__name__]}
-            self.data = data.TimeSeries.with_window(self.ch_names, self.sfreq,
-                                                    metadata=metadata)
+            self.data = data.TimeSeries.with_window(self.ch_names,
+                                                    self.sfreq,
+                                                    metadata=metadata,
+                                                    **kwargs)
         else:
             # user-defined instance
             self.data = data_
@@ -139,6 +142,10 @@ class LSLStreamer:
 
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
+
+        finally:
+            # write any remaining samples in `self.data` to file
+            self.data.write_to_file()
 
     def _new_thread(self):
         # break loop in `stream` to cause thread to return
