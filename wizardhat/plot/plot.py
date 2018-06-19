@@ -53,6 +53,7 @@ class Lines(Plotter):
         p = figrue()
 
         self.start()
+
     def start():
 
         self.reformat()
