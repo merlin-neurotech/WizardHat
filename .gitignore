@@ -152,3 +152,6 @@ flycheck_*.el
 
 # directory configuration
 .dir-locals.el
+
+# vscode settings
+.vscode/settings.json
