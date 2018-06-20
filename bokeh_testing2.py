@@ -45,7 +45,8 @@ class Lines():
     form (number of channels and rows/samples); the user can cycle between
     plots of each data source with the 'D' key.
     """
-    def __init__(self, data, palette='Category10', autostart=True):
+    def __init__(self, data, palette='Category10', bgcolor="white",
+                 autostart=True):
         """Construct a `Lines` instance.
         Args:
             data (data.Data or List[data.Data]): Data object(s) managing data
@@ -58,10 +59,12 @@ class Lines():
         """
 
         self.data = data
+        # TODO: initialize with existing samples in self.data.data
         data_dict = {name: [] for name in self.data.dtype.names}
         self.source = ColumnDataSource(data_dict)
 
         self._colors = palettes[palette][len(self.data.ch_names)]
+        self._bgcolor = bgcolor
 
         if autostart:
             self.run_server()
@@ -76,6 +79,8 @@ class Lines():
             p.x_range.follow_interval = 5  # in s (based on the actual value of the x in p.line)
             p.x_range.range_padding = 0  # we can play with this stuff
             p.yaxis.axis_label = ch
+            p.background_fill_color = self._bgcolor
+            #p.background_fill_alpha = 0.5
             p.line(x='time', y=ch, alpha=0.8, line_width=2,
                    color=self._colors[i], source=self.source)
             self.p.append([p])
