@@ -8,6 +8,7 @@ from bokeh.models import ColumnDataSource
 from bokeh.transform import jitter
 from bokeh.layouts import row, column, gridplot
 from bokeh.driving import count
+from bokeh.server.server import Server
 
 """Rough implementation of a standalone bokeh server. 
 
@@ -65,8 +66,9 @@ class Lines():
         self.source = ColumnDataSource({'time':[], 'TP9':[], 'AF7':[],'AF8':[],'TP10':[]})#,'Right AUX':[]})
         self.start()
     def start(self):
-        self.set_layout()
         self.run_server()
+        #self.set_layout()
+        #self.set_callbacks()
     
     def set_layout(self):
         self.p = figure(plot_height=100, tools="xpan,xwheel_zoom,xbox_zoom,reset", 
@@ -121,9 +123,20 @@ class Lines():
             
     #    show(p)
     
+    def set_callbacks(self):
+        self.curdoc.add_root(gridplot([[self.p],[self.p2],[self.p3],[self.p4]], toolbar_location="left", plot_width=1000))
+        self.curdoc.add_periodic_callback(self.update, 1000) # in ms
+        self.curdoc.title = "Dummy EEG Stream"
+    
+    def app_manager(self,curdoc):
+        self.curdoc=curdoc
+        self.set_layout()
+        self.set_callbacks()
+    
     def run_server(self):
-        curdoc().add_root(gridplot([[self.p],[self.p2],[self.p3],[self.p4]], toolbar_location="left", plot_width=1000))
-        curdoc().add_periodic_callback(self.update, 50) # in ms
-        curdoc().title = "Dummy EEG Stream"
+        server = Server({'/':self.app_manager})
+        server.start()
+        server.io_loop.add_callback(server.show,"/")
+        server.io_loop.start()
 
 Lines(streamer.data)
