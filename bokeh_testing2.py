@@ -125,7 +125,7 @@ class Lines():
     
     def set_callbacks(self):
         self.curdoc.add_root(gridplot([[self.p],[self.p2],[self.p3],[self.p4]], toolbar_location="left", plot_width=1000))
-        self.curdoc.add_periodic_callback(self.update, 1000) # in ms
+        self.curdoc.add_periodic_callback(self.update, 50) # in ms
         self.curdoc.title = "Dummy EEG Stream"
     
     def app_manager(self,curdoc):
