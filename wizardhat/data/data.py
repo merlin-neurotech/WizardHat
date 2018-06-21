@@ -277,8 +277,8 @@ class TimeSeries(Data):
                 Data type(s) in `Iterable` correspond to the type(s) specified
                 in `dtype`.
         """
-        new = self._format_samples(timestamps, samples)
-        self._split_append(new)
+        self._new = self._format_samples(timestamps, samples)
+        self._split_append(self._new)
         self.updated.set()
 
     def write_to_file(self, force=False):
@@ -348,7 +348,11 @@ class TimeSeries(Data):
             return np.copy(self._data['time'])
 
     @property
-    def last(self):
+    def last_samples(self):
+        return np.copy(self._new)
+
+    @property
+    def last_sample(self):
         """Last-stored row (timestamp and sample)."""
         with self._lock:
             return np.copy(self._data[-1])

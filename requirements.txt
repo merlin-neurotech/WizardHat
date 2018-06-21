@@ -5,3 +5,4 @@ numpy==1.13.3
 pygatt==3.2.0
 pylsl==1.10.5
 scipy==1.0.0
+bokeh==0.13.0

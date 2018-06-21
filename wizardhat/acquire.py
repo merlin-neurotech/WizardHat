@@ -156,8 +156,9 @@ class LSLStreamer:
 
     def _dejitter_timestamps(self, timestamps):
         """Partial function for more concise call during loop."""
+        last_time = self.data.last_sample['time']
         dejittered = dejitter_timestamps(timestamps, sfreq=self.sfreq,
-                                         last_time=self.data.last['time'])
+                                         last_time=last_time)
         return dejittered
 
 
