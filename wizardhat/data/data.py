@@ -198,6 +198,7 @@ class TimeSeries(Data):
 
     TODO:
         * Warning (error?) when timestamps are out of order
+        * Per-channel units?
     """
 
     def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
@@ -352,3 +353,47 @@ class TimeSeries(Data):
         """Last-stored row (timestamp and sample)."""
         with self._lock:
             return np.copy(self._data[-1])
+
+
+class Spectrum(Data):
+    """Manages spectral (e.g. frequency-domain) data.
+
+    Such data might conceivably be stored in `TimeSeries` objects, where
+    discretization of the independent variable (e.g. frequency) would
+    correspond to the number of channels. However, those channels are
+    intended to correspond to distinct named variables with potentially
+    differing properties, whereas `Spectrum` stores values across a constant
+    discretization of a single variable (e.g. frequency or wavelength).
+    """
+
+    def __init__(self, indep_range, n_samples=2560, indep_name="freq",
+                 indep_dtype=None, values_dtype=None):
+        """Create a new `Spectrum` object.
+
+        Args:
+            indep_range (Iterable): Values of the independent variable.
+            n_samples (int): Number of spectra updates to keep.
+            indep_name (str): Name of the independent variable.
+                Default: `"freq"`.
+            indep_dtype (type or np.dtype): Independent variable datatype.
+                Default: `np.float64`.
+            values_dtype (type or np.dtype): Spectrum datatype.
+                Default: `np.float64`.
+        """
+        if indep_dtype is None:
+            indep_dtype = np.float64
+        if values_dtype is None:
+            values_dtype = np.float64
+
+        values_shape = (n_samples, len(indep_range))
+        # TODO: this doesn't quite make sense...
+        # supposed to correspond to a single entry
+        self._dtype = np.dtype({indep_name: (indep_dtype, len(indep_range)),
+                                'values': (values_dtype, values_shape)})
+        self._data = None
+
+    def initialize(self):
+        pass
+
+    def update(self):
+        pass
