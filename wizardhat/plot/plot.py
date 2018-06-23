@@ -56,7 +56,7 @@ class Lines():
     plots of each data source with the 'D' key.
     """
 
-    def __init__(self, data, n_samples=500, palette='Category10',
+    def __init__(self, data, n_samples=5000, palette='Category10',
                  bgcolor="white", autostart=True):
         """Construct a `Lines` instance.
         Args:
@@ -101,7 +101,7 @@ class Lines():
         for i, ch in enumerate(self.data.ch_names):
             p = figure(plot_height=100,
                        tools="xpan,xwheel_zoom,xbox_zoom,reset",
-                       x_axis_type=None, y_axis_location="right")
+                       x_axis_type='datetime', y_axis_location="right")
             p.x_range.follow = "end"  # always follows new data in source
             p.x_range.follow_interval = 5  # in s
             p.x_range.range_padding = 0  # we can play with this stuff
