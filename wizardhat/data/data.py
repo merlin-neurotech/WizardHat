@@ -364,10 +364,14 @@ class Spectrum(Data):
     intended to correspond to distinct named variables with potentially
     differing properties, whereas `Spectrum` stores values across a constant
     discretization of a single variable (e.g. frequency or wavelength).
+
+    TODO:
+        * Class name: Bins? (can also store histogram data)
+        * Inherit from TimeSeries and pass channel_fmt?
     """
 
-    def __init__(self, indep_range, n_samples=2560, indep_name="freq",
-                 indep_dtype=None, values_dtype=None):
+    def __init__(self, indep_range, n_samples=2560, indep_name="Frequency",
+                 values_dtype=None, **kwargs):
         """Create a new `Spectrum` object.
 
         Args:
@@ -375,25 +379,35 @@ class Spectrum(Data):
             n_samples (int): Number of spectra updates to keep.
             indep_name (str): Name of the independent variable.
                 Default: `"freq"`.
-            indep_dtype (type or np.dtype): Independent variable datatype.
-                Default: `np.float64`.
             values_dtype (type or np.dtype): Spectrum datatype.
                 Default: `np.float64`.
         """
-        if indep_dtype is None:
-            indep_dtype = np.float64
+        super().__init__(self, **kwargs)
+
         if values_dtype is None:
             values_dtype = np.float64
 
-        values_shape = (n_samples, len(indep_range))
-        # TODO: this doesn't quite make sense...
-        # supposed to correspond to a single entry
-        self._dtype = np.dtype({indep_name: (indep_dtype, len(indep_range)),
-                                'values': (values_dtype, values_shape)})
-        self._data = None
+        try:
+            if not sorted(indep_range) == indep_range:
+                raise TypeError
+            self._range = indep_range
+        except TypeError:
+            raise TypeError("indep_range not a monotonic increasing sequence")
 
-    def initialize(self):
-        pass
+        self._dtype = np.dtype({'time': np.float64,
+                                'values': (values_dtype, len(indep_range))})
+        self.initialize(int(n_samples))
+
+    def initialize(self, n_samples=None):
+        if n_samples is None:
+            n_samples = self.n_samples
+        with self._lock:
+            self._data = np.zeros((n_samples,), dtype=self._dtype)
+        self._count = n_samples
 
     def update(self):
         pass
+
+    @property
+    def range(self):
+        return np.copy(self._range)
