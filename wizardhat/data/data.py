@@ -199,6 +199,7 @@ class TimeSeries(Data):
     TODO:
         * Warning (error?) when timestamps are out of order
         * Per-channel units?
+        * _format_samples based on dtype, e.g. for array-valued channels
     """
 
     def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
@@ -223,8 +224,9 @@ class TimeSeries(Data):
         if str(channel_fmt) == channel_fmt:  # quack
             channel_fmt = [channel_fmt] * len(ch_names)
         try:
-            self._dtype = np.dtype({'names': ["time"] + ch_names,
-                                    'formats': [np.float64] + channel_fmt})
+            self._dtype = np.dtype({'names': ["time"] + list(ch_names),
+                                    'formats': [np.float64] + list(channel_fmt)
+                                    })
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
@@ -277,6 +279,9 @@ class TimeSeries(Data):
             samples (Iterable): Channel data.
                 Data type(s) in `Iterable` correspond to the type(s) specified
                 in `dtype`.
+
+        TODO:
+            * Sort timestamps/warn if unsorted?
         """
         new = self._format_samples(timestamps, samples)
         self._split_append(new)
@@ -355,24 +360,16 @@ class TimeSeries(Data):
             return np.copy(self._data[-1])
 
 
-class Spectrum(Data):
-    """Manages spectral (e.g. frequency-domain) data.
-
-    Such data might conceivably be stored in `TimeSeries` objects, where
-    discretization of the independent variable (e.g. frequency) would
-    correspond to the number of channels. However, those channels are
-    intended to correspond to distinct named variables with potentially
-    differing properties, whereas `Spectrum` stores values across a constant
-    discretization of a single variable (e.g. frequency or wavelength).
+class Spectra(TimeSeries):
+    """Manages a time series of spectral (e.g. frequency-domain) data.
 
     TODO:
-        * Class name: Bins? (can also store histogram data)
-        * Inherit from TimeSeries and pass channel_fmt?
+        * What do timestamps mean here? Transformer-dependent?
     """
 
-    def __init__(self, indep_range, n_samples=2560, indep_name="Frequency",
-                 values_dtype=None, **kwargs):
-        """Create a new `Spectrum` object.
+    def __init__(self, indep_range, indep_name="Frequency", values_dtype=None,
+                 **kwargs):
+        """Create a new `Spectra` object.
 
         Args:
             indep_range (Iterable): Values of the independent variable.
@@ -382,32 +379,42 @@ class Spectrum(Data):
             values_dtype (type or np.dtype): Spectrum datatype.
                 Default: `np.float64`.
         """
-        super().__init__(self, **kwargs)
-
         if values_dtype is None:
             values_dtype = np.float64
 
         try:
-            if not sorted(indep_range) == indep_range:
+            if not sorted(indep_range) == list(indep_range):
                 raise TypeError
-            self._range = indep_range
         except TypeError:
             raise TypeError("indep_range not a monotonic increasing sequence")
 
-        self._dtype = np.dtype({'time': np.float64,
-                                'values': (values_dtype, len(indep_range))})
-        self.initialize(int(n_samples))
+        super().__init__(ch_names=["values"],
+                         channel_fmt=[(values_dtype, len(indep_range))],
+                         **kwargs)
 
-    def initialize(self, n_samples=None):
-        if n_samples is None:
-            n_samples = self.n_samples
-        with self._lock:
-            self._data = np.zeros((n_samples,), dtype=self._dtype)
-        self._count = n_samples
+        self._range = np.array(indep_range)
+        self._indep_name = indep_name
 
-    def update(self):
-        pass
+    def update(self, timestamp, spectrum):
+        """Append a spectrum to stored data.
+
+        Args:
+            timestamp (np.float64): Timestamp for the spectrum.
+            spectrum (Iterable): Spectrum values.
+
+        TODO:
+            * May be able to remove this method if `TimeSeries` update method
+              appends based on channel data type (see `TimeSeries` TODOs)
+        """
+        try:
+            super(Spectra, self).update([timestamp], [[spectrum]])
+        except ValueError:
+            raise ValueError("cannot update with spectrum of incorrect length")
 
     @property
     def range(self):
         return np.copy(self._range)
+
+    @property
+    def indep_name(self):
+        return self._indep_name
