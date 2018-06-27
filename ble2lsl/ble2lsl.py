@@ -50,7 +50,7 @@ class OutletStreamer:
         * Some way to generalize autostart behaviour?
     """
 
-    def __init__(self, device_params=None, stream_params=None, chunk_size=12,
+    def __init__(self, device_params=None, stream_params=None,
                  time_func=time.time):
         """Construct an `OutletStreamer` object.
 
@@ -65,12 +65,12 @@ class OutletStreamer:
         if stream_params is None:
             stream_params = {}
         self._stream_params = stream_params
-        self._chunk_size = chunk_size
+        self._chunk_size = self._device_params['chunk_size']
         self._time_func = time_func
 
         # construct LSL StreamInfo and StreamOutlet
         self.info = lsl.StreamInfo(**stream_params, source_id='MuseNone')
-        self.outlet = lsl.StreamOutlet(self.info, chunk_size=chunk_size,
+        self.outlet = lsl.StreamOutlet(self.info, chunk_size=self._chunk_size,
                                        max_buffered=360)
 
         self._init_sample()
@@ -89,7 +89,7 @@ class OutletStreamer:
 
     def _push_chunk(self, channels, timestamps):
         for sample in range(self._chunk_size):
-            self.outlet.push_sample(channels[:, sample], timestamps[sample])
+            self.outlet.push_sample(channels[:,sample], timestamps[sample])
 
     def _add_device_info(self):
         """Adds device-specific parameters to `info`."""
@@ -118,7 +118,7 @@ class BLEStreamer(OutletStreamer):
         * move fake data generator to outside/iterator?
     """
 
-    def __init__(self, device_params, address=None, backend='bgapi',
+    def __init__(self, device_params, PacketManager, address=None, backend='bgapi',
                  interface=None, autostart=True, **kwargs):
         """Construct a `BLEStreamer` instance.
 
@@ -126,6 +126,7 @@ class BLEStreamer(OutletStreamer):
             device_params (dict): Device-specific parameters.
                 Includes GATT handles and characteristics, channel UUIDs and
                 names, and other device metadata.
+            packet_manager (func): Device-specific byte parsing functions and algorithms
             address (str): Device MAC address for establishing connection.
                 By default, this is acquired automatically.
             backend (str): Which `pygatt` backend to use.
@@ -136,8 +137,8 @@ class BLEStreamer(OutletStreamer):
             autostart (bool): Whether to start streaming on instantiation.
         """
         OutletStreamer.__init__(self, device_params=device_params, **kwargs)
+        self._packet_manager = PacketManager()
         self.address = address
-
         # initialize gatt adapter
         if backend == 'bgapi':
             self._adapter = pygatt.BGAPIBackend(serial_port=interface)
@@ -152,7 +153,6 @@ class BLEStreamer(OutletStreamer):
         self._set_packet_format()
         self._add_device_info()
         self._ble_params = self._device_params["ble"]
-        self.ganglion=True
         self.initialize_timestamping()
 
         if autostart:
@@ -169,8 +169,9 @@ class BLEStreamer(OutletStreamer):
         """
 
         return cls(device_params=device.PARAMS,
-                stream_params=device.STREAM_PARAMS,
-                **kwargs)
+                   stream_params=device.STREAM_PARAMS,
+                   PacketManager=device.PacketManager,    
+                   ** kwargs)
 
     def initialize_timestamping(self):
         """Reset the parameters for timestamp generation."""
@@ -179,13 +180,14 @@ class BLEStreamer(OutletStreamer):
         self.start_time = self._time_func()
 
     def start(self):
-        if not self.ganglion:
-            """Start streaming by writing to the relevant GATT characteristic."""
+        """Start streaming by writing to the relevant GATT characteristic."""
+        if self._device_params['manufacturer'] == 'Muse':
             self._device.char_write_handle(self._ble_params["handle"],
-                                       value=self._ble_params["stream_on"],
-                                       wait_for_response=False)
-        if self.ganglion:
-            self._device.char_write(self._ble_params['send'], value=b'b', wait_for_response=False)
+                                           value=self._ble_params["stream_on"],
+                                           wait_for_response=False)
+        if self._device_params['manufacturer'] == 'OpenBCI':
+            self._device.char_write(
+                self._ble_params['send'], value=b'b', wait_for_response=False)
 
     def stop(self):
         """Stop streaming by writing to the relevant GATT characteristic."""
@@ -224,29 +226,19 @@ class BLEStreamer(OutletStreamer):
         if self.address is None:
             # get the device address if none was provided
             self.address = self._resolve_address(self._stream_params["name"])
-        if self.ganglion:
-            try: 
-                self._device = self._adapter.connect(self.address, address_type=BLEAddressType.random)
-            
-            except pygatt.exceptions.NotConnectedError:
-                e_msg = "Unable to connect to device at address {}" \
-                    .format(self.address)
-                raise(IOError(e_msg))
-        else:     
             try:
-                # connect to the device
-                self._device = self._adapter.connect(self.address)
+                self._device = self._adapter.connect(
+                    self.address, address_type=self._ble_params['address_type'])
+
             except pygatt.exceptions.NotConnectedError:
                 e_msg = "Unable to connect to device at address {}" \
                     .format(self.address)
                 raise(IOError(e_msg))
-        if not self.ganglion:
+
             # subscribe to the muse channels specified by the device parameters
-            for uuid in self._device_params["ch_uuids"]:
-                self._device.subscribe(uuid, callback=self._transmit_packet)
-            #subscribe to recieve simblee command from ganglion doc
-        else:
-            self._device.subscribe(self._ble_params['receive'], callback=self.gang_packet_manager)
+        for uuid in self._ble_params["uuid"]:
+            self._device.subscribe(uuid, callback=self._transmit_packet)
+            # subscribe to recieve simblee command from ganglion doc
 
     def _resolve_address(self, name):
         list_devices = self._adapter.scan(timeout=10.5)
@@ -259,328 +251,25 @@ class BLEStreamer(OutletStreamer):
         """Defines the format for parsing bit strings received over BLE."""
         dtypes = self._device_params["packet_dtypes"]
         self._packet_format = dtypes["index"] + \
-                              (',' + dtypes["ch_value"]) * self._chunk_size
+            (',' + dtypes["ch_value"]) * self._chunk_size
 
-    def _unpack_channel(self, packet):
-        """Parse the bitstrings received over BLE."""
-        packet_bits = bitstring.Bits(bytes=packet)
-        unpacked = packet_bits.unpack(self._packet_format)
-
-        packet_index = unpacked[0]
-        packet_values = np.array(unpacked[1:])
-        packet_values = 0.48828125 * (packet_values - 2048)
-
-        return packet_index, packet_values
-
-    def _transmit_packet(self, handle, data):
-        """Callback function used by `pygatt` to receive BLE data."""
+    def _transmit_packet(self,handle,data):
+        timestamp = self._time_func
+        self._packet_manager.parse(data)
+        sample = self._packet_manager.sample
+        tm = sample[0]
+        d = sample[1]
         timestamp = self._time_func()
-        index = int((handle - 32) / 3)
-
-        tm, d = self._unpack_channel(data)
-
-        if self._last_tm == 0:
-            self._last_tm = tm - 1
-
-        self._data[index] = d
-        self._timestamps[index] = timestamp
-
-        # if last channel in chunk
-        if handle == 35:
-            if tm != self._last_tm + 1:
-                print("Missing sample {} : {}".format(tm, self._last_tm))
-            self._last_tm = tm
-
-            # sample indices
-            sample_indices = np.arange(self._chunk_size) + self._sample_index
-            self._sample_index += self._chunk_size
-
-            timestamps = sample_indices / self.info.nominal_srate() \
-                         + self.start_time
-
-            self._push_chunk(self._data, timestamps)
-            self._init_sample()
+        self._push_chunk(d,[timestamp])
+        #if self._last_tm == 0:
+        #    self._last_tm = tm - 1
+        
 
     @property
     def backend(self):
         """The `pygatt` backend used by the instance."""
         return self._backend
 
-    def gang_packet_manager(self, handle, data):
-        unpac = data
-        start_byte = unpac[0]
-        # Give the informative part of the packet to proper handler -- split between ID and data bytes
-        # Raw uncompressed
-        if start_byte == 0:
-            recieving_ASCII = False
-            self.parseRaw(start_byte, unpac[1:])
-        # 18-bit compression with Accelerometer
-        elif start_byte >= 1 and start_byte <= 100:
-            receiving_ASCII = False
-            self.parse18bit(start_byte, unpac[1:])
-        # 19-bit compression without Accelerometer
-        elif start_byte >=101 and start_byte <= 200:
-            receiving_ASCII = False
-            self.parse19bit(start_byte-100, unpac[1:])
-        # Impedance Channel
-        elif start_byte >= 201 and start_byte <= 205:
-            receiving_ASCII = False
-            self.parseImpedance(start_byte, packet[1:])
-        # Part of ASCII -- TODO: better formatting of incoming ASCII
-        elif start_byte == 206:
-            print("%\t" + str(packet[1:]))
-            receiving_ASCII = True
-            time_last_ASCII = timeit.default_timer() 
-      
-        # End of ASCII message
-        elif start_byte == 207:
-            print("%\t" + str(packet[1:]))
-            print ("$$$")
-            receiving_ASCII = False
-        else:
-            print("Warning: unknown type of packet: " + str(start_byte))
-
-    def parseRaw(self,packet_id, packet):
-        if len(packet) != 19:
-            print('Wrong size, for raw data' + str(len(data)) + ' instead of 19 bytes')
-            return
-        chan_data = []
-        for i in range(0,12,3):
-            chan_data.append(self.conv24bitsToInt(packet[i:i+3]))
-        print(chan_data)
-
-    def parse19bit(self,packet_id, packet):
-        if len(packet) != 19:
-            print('Wrong size, for 19-bit compression data' + str(len(data)) + ' instead of 19 bytes')
-            return
-        deltas = self.decompressDeltas19Bit(packet)
-        delta_id = 1
-        for delta in deltas:
-        # convert from packet to sample id
-            sample_id = (packet_id - 1) * 2 + delta_id
-        # 19bit packets hold deltas between two samples
-        # TODO: use more broadly numpy
-            delta_id += 1
-    def parse18bit(self, packet_id, packet):
-        """ Dealing with "18-bit compression without Accelerometer" """
-        if len(packet) != 19:
-            print('Wrong size, for 18-bit compression data' + str(len(data)) + ' instead of 19 bytes')
-            return
-        deltas = self.decompressDeltas18Bit(packet[:-1])
-        print(deltas)
-        delta_id = 1
-        for delta in deltas:
-        # convert from packet to sample id
-            sample_id = (packet_id - 1) * 2 + delta_id
-            delta_id += 1
-
-    def conv24bitsToInt(self,unpacked):
-        """ Convert 24bit data coded on 3 bytes to a proper integer """ 
-        if len(unpacked) != 3:
-            raise ValueError("Input should be 3 bytes long.")
-
-        # FIXME: quick'n dirty, unpack wants strings later on
-        literal_read = struct.pack('3B', unpacked[0], unpacked[1], unpacked[2])
-
-        #3byte int in 2s compliment
-        if (unpacked[0] > 127):
-            pre_fix = bytes(bytearray.fromhex('FF')) 
-        else:
-            pre_fix = bytes(bytearray.fromhex('00'))
-
-        literal_read = pre_fix + literal_read;
-
-        #unpack little endian(>) signed integer(i) (makes unpacking platform independent)
-        myInt = struct.unpack('>i', literal_read)[0]
-
-        return myInt
-
-    def conv19bitToInt32(self,threeByteBuffer):
-        """ Convert 19bit data coded on 3 bytes to a proper integer (LSB bit 1 used as sign). """ 
-        if len(threeByteBuffer) != 3:
-            raise ValueError("Input should be 3 bytes long.")
-
-        prefix = 0;
-
-        # if LSB is 1, negative number, some hasty unsigned to signed conversion to do
-        if threeByteBuffer[2] & 0x01 > 0:
-            prefix = 0b1111111111111;
-            return ((prefix << 19) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]) | ~0xFFFFFFFF
-        else:
-            return (prefix << 19) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]
-
-    def conv18bitToInt32(self,threeByteBuffer):
-        """ Convert 18bit data coded on 3 bytes to a proper integer (LSB bit 1 used as sign) """ 
-        if len(threeByteBuffer) != 3:
-            raise Valuerror("Input should be 3 bytes long.")
-
-        prefix = 0;
-
-        # if LSB is 1, negative number, some hasty unsigned to signed conversion to do
-        if threeByteBuffer[2] & 0x01 > 0:
-            prefix = 0b11111111111111;
-            return ((prefix << 18) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]) | ~0xFFFFFFFF
-        else:
-            return (prefix << 18) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]
-  
-    def conv8bitToInt8(self,byte):
-        """ Convert one byte to signed value """ 
-
-        if byte > 127:
-            return (256-byte) * (-1)
-        else:
-            return byte
-  
-    def decompressDeltas19Bit(self,buffer):
-            """
-            Called to when a compressed packet is received.
-            buffer: Just the data portion of the sample. So 19 bytes.
-            return {Array} - An array of deltas of shape 2x4 (2 samples per packet and 4 channels per sample.)
-            """ 
-            if len(buffer) != 19:
-                raise ValueError("Input should be 19 bytes long.")
-            
-            receivedDeltas = [[0, 0, 0, 0],[0, 0, 0, 0]]
-
-            # Sample 1 - Channel 1
-            miniBuf = [
-                (buffer[0] >> 5),
-                ((buffer[0] & 0x1F) << 3 & 0xFF) | (buffer[1] >> 5),
-                ((buffer[1] & 0x1F) << 3 & 0xFF) | (buffer[2] >> 5)
-                ]
-
-            receivedDeltas[0][0] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 1 - Channel 2
-            miniBuf = [
-                (buffer[2] & 0x1F) >> 2,
-                (buffer[2] << 6 & 0xFF) | (buffer[3] >> 2),
-                (buffer[3] << 6 & 0xFF) | (buffer[4] >> 2)
-                ]
-            receivedDeltas[0][1] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 1 - Channel 3
-            miniBuf = [
-                ((buffer[4] & 0x03) << 1 & 0xFF) | (buffer[5] >> 7),
-                ((buffer[5] & 0x7F) << 1 & 0xFF) | (buffer[6] >> 7),
-                ((buffer[6] & 0x7F) << 1 & 0xFF) | (buffer[7] >> 7)
-                ]
-            receivedDeltas[0][2] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 1 - Channel 4
-            miniBuf = [
-                ((buffer[7] & 0x7F) >> 4),
-                ((buffer[7] & 0x0F) << 4 & 0xFF) | (buffer[8] >> 4),
-                ((buffer[8] & 0x0F) << 4 & 0xFF) | (buffer[9] >> 4)
-                ]
-            receivedDeltas[0][3] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 2 - Channel 1
-            miniBuf = [
-                ((buffer[9] & 0x0F) >> 1),
-                (buffer[9] << 7 & 0xFF) | (buffer[10] >> 1),
-                (buffer[10] << 7 & 0xFF) | (buffer[11] >> 1)
-                ]
-            receivedDeltas[1][0] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 2 - Channel 2
-            miniBuf = [
-                ((buffer[11] & 0x01) << 2 & 0xFF) | (buffer[12] >> 6),
-                (buffer[12] << 2 & 0xFF) | (buffer[13] >> 6),
-                (buffer[13] << 2 & 0xFF) | (buffer[14] >> 6)
-                ]
-            receivedDeltas[1][1] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 2 - Channel 3
-            miniBuf = [
-                ((buffer[14] & 0x38) >> 3),
-                ((buffer[14] & 0x07) << 5 & 0xFF) | ((buffer[15] & 0xF8) >> 3),
-                ((buffer[15] & 0x07) << 5 & 0xFF) | ((buffer[16] & 0xF8) >> 3)
-                ]
-            receivedDeltas[1][2] = self.conv19bitToInt32(miniBuf)
-
-            # Sample 2 - Channel 4
-            miniBuf = [(buffer[16] & 0x07), buffer[17], buffer[18]]
-            receivedDeltas[1][3] = self.conv19bitToInt32(miniBuf)
-
-            return receivedDeltas;
-
-    def decompressDeltas18Bit(self,buffer):
-        """
-        Called to when a compressed packet is received.
-        buffer: Just the data portion of the sample. So 19 bytes.
-        return {Array} - An array of deltas of shape 2x4 (2 samples per packet and 4 channels per sample.)
-        """ 
-        if len(buffer) != 18:
-            raise ValueError("Input should be 18 bytes long.")
-        
-        receivedDeltas = [[0, 0, 0, 0],[0, 0, 0, 0]]
-
-        # Sample 1 - Channel 1
-        miniBuf = [
-            (buffer[0] >> 6),
-            ((buffer[0] & 0x3F) << 2 & 0xFF) | (buffer[1] >> 6),
-            ((buffer[1] & 0x3F) << 2 & 0xFF) | (buffer[2] >> 6)
-            ]
-        receivedDeltas[0][0] = conv18bitToInt32(miniBuf);
-
-        # Sample 1 - Channel 2
-        miniBuf = [
-            (buffer[2] & 0x3F) >> 4,
-            (buffer[2] << 4 & 0xFF) | (buffer[3] >> 4),
-            (buffer[3] << 4 & 0xFF) | (buffer[4] >> 4)
-            ]
-        receivedDeltas[0][1] = conv18bitToInt32(miniBuf);
-
-        # Sample 1 - Channel 3
-        miniBuf = [
-            (buffer[4] & 0x0F) >> 2,
-            (buffer[4] << 6 & 0xFF) | (buffer[5] >> 2),
-            (buffer[5] << 6 & 0xFF) | (buffer[6] >> 2)
-            ]
-        receivedDeltas[0][2] = conv18bitToInt32(miniBuf);
-
-        # Sample 1 - Channel 4
-        miniBuf = [
-            (buffer[6] & 0x03),
-            buffer[7],
-            buffer[8]
-            ]
-        receivedDeltas[0][3] = conv18bitToInt32(miniBuf);
-
-        # Sample 2 - Channel 1
-        miniBuf = [
-            (buffer[9] >> 6),
-            ((buffer[9] & 0x3F) << 2 & 0xFF) | (buffer[10] >> 6),
-            ((buffer[10] & 0x3F) << 2 & 0xFF) | (buffer[11] >> 6)
-            ]
-        receivedDeltas[1][0] = conv18bitToInt32(miniBuf);
-
-        # Sample 2 - Channel 2
-        miniBuf = [
-            (buffer[11] & 0x3F) >> 4,
-            (buffer[11] << 4 & 0xFF) | (buffer[12] >> 4),
-            (buffer[12] << 4 & 0xFF) | (buffer[13] >> 4)
-            ]
-        receivedDeltas[1][1] = conv18bitToInt32(miniBuf);
-
-        # Sample 2 - Channel 3
-        miniBuf = [
-            (buffer[13] & 0x0F) >> 2,
-            (buffer[13] << 6 & 0xFF) | (buffer[14] >> 2),
-            (buffer[14] << 6 & 0xFF) | (buffer[15] >> 2)
-            ]
-        receivedDeltas[1][2] = conv18bitToInt32(miniBuf);
-
-        # Sample 2 - Channel 4
-        miniBuf = [
-            (buffer[15] & 0x03),
-            buffer[16],
-            buffer[17]
-            ]
-        receivedDeltas[1][3] = conv18bitToInt32(miniBuf);
-
-        return receivedDeltas;
 
 class DummyStreamer(OutletStreamer):
     """Streams data over an LSL outlet from a local source.
@@ -648,7 +337,7 @@ class DummyStreamer(OutletStreamer):
 
         # sum frequencies with random amplitudes
         for freq in a_freqs:
-            y += np.random.randint(1,5) * np.sin(freq * x)
+            y += np.random.randint(1, 5) * np.sin(freq * x)
 
         noise = np.random.normal(0, 1, (self._n_chan, n_samples))
         dummy_data = y + noise
@@ -661,9 +350,7 @@ class DummyStreamer(OutletStreamer):
         TODO:
             * replaced when using an iterator
         """
-        self._data = self._dummy_data[:,chunk_ind:chunk_ind+self._chunk_size]
+        self._data = self._dummy_data[:, chunk_ind:chunk_ind+self._chunk_size]
         # TODO: more realistic timestamps
         timestamp = self._time_func()
         self._timestamps = np.array([timestamp]*self._chunk_size)
-
-    
