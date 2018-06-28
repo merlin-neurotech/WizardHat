@@ -73,7 +73,7 @@ class Lines():
 
         # TODO: initialize with existing samples in self.data.data
         data_dict = {name: self.data.data[name][:n_samples]
-                     for name in self.data.dtype.names}
+                     #for name in self.data.dtype.names}
         self._source = ColumnDataSource(data_dict)
         self.server = Server({'/': self._app_manager})
         self._update_thread = Thread(target=self._get_new_samples)
@@ -101,7 +101,7 @@ class Lines():
         for i, ch in enumerate(self.data.ch_names):
             p = figure(plot_height=100,
                        tools="xpan,xwheel_zoom,xbox_zoom,reset",
-                       x_axis_type='datetime', y_axis_location="right")
+                       x_axis_type='datetime', y_axis_location="right",y_range=(-10,10))
             p.x_range.follow = "end"  # always follows new data in source
             p.x_range.follow_interval = 5  # in s
             p.x_range.range_padding = 0  # we can play with this stuff
