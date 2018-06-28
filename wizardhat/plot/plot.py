@@ -73,7 +73,7 @@ class Lines():
 
         # TODO: initialize with existing samples in self.data.data
         data_dict = {name: self.data.data[name][:n_samples]
-                     #for name in self.data.dtype.names}
+                     for name in self.data.dtype.names}
         self._source = ColumnDataSource(data_dict)
         self.server = Server({'/': self._app_manager})
         self._update_thread = Thread(target=self._get_new_samples)
