@@ -4,7 +4,7 @@ import struct
 PARAMS = dict(
     manufacturer='OpenBCI',
     units='microvolts',
-    ch_names=('TP9', 'AF7', 'AF8', 'TP1'),
+    ch_names=('A', 'B', 'C', 'D'),
     chunk_size=1,
     ble=dict(
         address_type=BLEAddressType.random,
@@ -12,6 +12,8 @@ PARAMS = dict(
         # Recieve UUID TODO Naming scheme for the ble2lsl subscription for all devices
         uuid=['2d30c082f39f4ce6923f3484ea480596'],
         send="2d30c083f39f4ce6923f3484ea480596",
+        stream_on=b'b',
+        stream_off=b's',
         disconnect="2d30c084f39f4ce6923f3484ea480596",),
     packet_dtypes=dict(index='uint:16', ch_value='uint:12')
 )
@@ -57,7 +59,6 @@ class PacketManager():
   def parse(self, packet): 
     unpac = packet
     start_byte = unpac[0]
-
     # Give the informative part of the packet to proper handler -- split between ID and data bytes
     # Raw uncompressed
     if start_byte == 0:

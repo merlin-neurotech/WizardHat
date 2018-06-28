@@ -33,46 +33,28 @@ STREAM_PARAMS = dict(
     channel_format='float32',
 )
 """Muse headset parameters for constructing `pylsl.StreamInfo`."""
+import numpy as np
 
+class PacketManager():
+    def __init__(self, scaling_output = True):
+        self.scaling_output = scaling_output
 
-def packet_manager(handle, data):
-    return parse_packet(handle, data)
-    
+    def parse(self,data,packet_format):
+ 
 
-def parse_packet(handle, data):
-    """Callback function used by `pygatt` to receive BLE data.""" 
-    index = int((handle - 32) / 3)
+        tm, d = self._unpack_channel(data,packet_format)
+        self.sample = [tm, d]
 
-    tm, d = _unpack_channel(data)
+    def _unpack_channel(self, packet, packet_format):
+        """Parse the bitstrings received over BLE."""
+        packet_bits = bitstring.Bits(bytes=packet)
+        unpacked = packet_bits.unpack(packet_format)
 
-    return [tm,d]
+        packet_index = unpacked[0]
+        packet_values = np.array(unpacked[1:])
+        if self.scaling_output:
+            packet_values = 0.48828125 * (packet_values - 2048)
 
-    # if last channel in chunk
-    if handle == 35:
-        if tm != self._last_tm + 1:
-            print("Missing sample {} : {}".format(tm, self._last_tm))
-        self._last_tm = tm
-
-        # sample indices
-        sample_indices = np.arange(self._chunk_size) + self._sample_index
-        self._sample_index += self._chunk_size
-
-        timestamps = sample_indices / self.info.nominal_srate() \
-            + self.start_time
-
-        self._push_chunk(self._data, timestamps)
-        self._init_sample()
-
-
-def _unpack_channel(self, packet):
-    """Parse the bitstrings received over BLE."""
-    packet_bits = bitstring.Bits(bytes=packet)
-    unpacked = packet_bits.unpack(self._packet_format)
-
-    packet_index = unpacked[0]
-    packet_values = np.array(unpacked[1:])
-    packet_values = 0.48828125 * (packet_values - 2048)
-
-    return packet_index, packet_values
+        return packet_index, packet_values
 
 
