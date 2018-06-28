@@ -77,7 +77,7 @@ class LSLStreamer:
             self.ch_names = list(muse2016.PARAMS['ch_names'])
         elif info.name() == 'Ganglion':
             from ble2lsl.devices import ganglion
-            self.ch_names == list(ganglion.PARAMS['ch_names'])
+            self.ch_names = list(ganglion.PARAMS['ch_names'])
         else:
             self.ch_names = get_ch_names(info)
 
