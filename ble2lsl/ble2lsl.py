@@ -181,17 +181,12 @@ class BLEStreamer(OutletStreamer):
 
     def start(self):
         """Start streaming by writing to the relevant GATT characteristic."""
-        if self._device_params['manufacturer'] == 'Muse':
-            self._device.char_write_handle(self._ble_params["handle"],
-                                           value=self._ble_params["stream_on"],
-                                           wait_for_response=False)
-        if self._device_params['manufacturer'] == 'OpenBCI':
-            self._device.char_write(
-                self._ble_params['send'], value=b'b', wait_for_response=False)
+        self._device.char_write(
+            self._ble_params['send'], value=self._ble_params['stream_on'], wait_for_response=False)
 
     def stop(self):
         """Stop streaming by writing to the relevant GATT characteristic."""
-        self._device.char_write_handle(self._ble_params["handle"],
+        self._device.char_write(self._ble_params["send"],
                                        value=self._ble_params["stream_off"],
                                        wait_for_response=False)
 
@@ -254,16 +249,42 @@ class BLEStreamer(OutletStreamer):
             (',' + dtypes["ch_value"]) * self._chunk_size
 
     def _transmit_packet(self,handle,data):
-        timestamp = self._time_func
-        self._packet_manager.parse(data)
-        sample = self._packet_manager.sample
-        tm = sample[0]
-        d = sample[1]
+        """Callback function used by `pygatt` to receive BLE data.""" 
+        #TODO Figure out how to handle the fact that one ganglion packet has 4 channels one time point
+        # and a muse packet is 12 time points of one channel (so 5 packets need to come in to fill data), therefore this if structure is necessary
+        # to determine when to push the chunk (for the muse its when all 5 channels were sent)
         timestamp = self._time_func()
-        self._push_chunk(d,[timestamp])
-        #if self._last_tm == 0:
-        #    self._last_tm = tm - 1
-        
+        if self._stream_params['name']=='Ganglion':
+            self._packet_manager.parse(data)
+            sample = self._packet_manager.sample
+            tm = sample[0]
+            d = sample[1]
+            self._push_chunk(d,[timestamp])
+        elif self._stream_params['name']=='Muse':
+            index = int((handle - 32) / 3)
+            self._packet_manager.parse(data,self._packet_format)
+            sample = self._packet_manager.sample
+            tm = sample[0]
+            d = sample[1]
+            if self._last_tm == 0:
+                self._last_tm = tm - 1
+            self._data[index] = d
+            self._timestamps[index] = timestamp
+            if handle == 35:
+                if tm != self._last_tm + 1:
+                    print("Missing sample {} : {}".format(tm, self._last_tm))
+                self._last_tm = tm
+
+                # sample indices
+                sample_indices = np.arange(self._chunk_size) + self._sample_index
+                self._sample_index += self._chunk_size
+
+                timestamps = sample_indices / self.info.nominal_srate() \
+                         + self.start_time
+
+                self._push_chunk(self._data, timestamps)
+                self._init_sample()
+       
 
     @property
     def backend(self):
