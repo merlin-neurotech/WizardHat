@@ -70,6 +70,7 @@ class OutletStreamer:
 
         # construct LSL StreamInfo and StreamOutlet
         self.info = lsl.StreamInfo(**stream_params, source_id='MuseNone')
+        self._add_device_info()
         self.outlet = lsl.StreamOutlet(self.info, chunk_size=self._chunk_size,
                                        max_buffered=360)
 
@@ -170,7 +171,7 @@ class BLEStreamer(OutletStreamer):
 
         return cls(device_params=device.PARAMS,
                    stream_params=device.STREAM_PARAMS,
-                   PacketManager=device.PacketManager,    
+                   PacketManager=device.PacketManager,
                    ** kwargs)
 
     def initialize_timestamping(self):
@@ -249,7 +250,7 @@ class BLEStreamer(OutletStreamer):
             (',' + dtypes["ch_value"]) * self._chunk_size
 
     def _transmit_packet(self,handle,data):
-        """Callback function used by `pygatt` to receive BLE data.""" 
+        """Callback function used by `pygatt` to receive BLE data."""
         #TODO Figure out how to handle the fact that one ganglion packet has 4 channels one time point
         # and a muse packet is 12 time points of one channel (so 5 packets need to come in to fill data), therefore this if structure is necessary
         # to determine when to push the chunk (for the muse its when all 5 channels were sent)
@@ -284,7 +285,6 @@ class BLEStreamer(OutletStreamer):
 
                 self._push_chunk(self._data, timestamps)
                 self._init_sample()
-       
 
     @property
     def backend(self):

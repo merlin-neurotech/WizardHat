@@ -72,14 +72,11 @@ class LSLStreamer:
         info = inlet.info()
         self.sfreq = info.nominal_srate()
         self.n_chan = info.channel_count()
-        if info.name() == 'Muse':
-            from ble2lsl.devices import muse2016
-            self.ch_names = list(muse2016.PARAMS['ch_names'])
-        elif info.name() == 'Ganglion':
-            from ble2lsl.devices import ganglion
-            self.ch_names = list(ganglion.PARAMS['ch_names'])
-        else:
-            self.ch_names = get_ch_names(info)
+        self.ch_names = get_ch_names(info)
+        if '' in self.ch_names:
+            raise ValueError("Empty channel name(s) in LSL stream info")
+        if not len(self.ch_names) == len(set(self.ch_names)):
+            raise ValueError("Duplicate channel names in LSL stream info")
 
         # instantiate the `data.TimeSeries` instance if one is not provided
         if data_ is None:
