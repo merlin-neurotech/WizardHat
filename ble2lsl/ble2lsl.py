@@ -65,14 +65,11 @@ class OutletStreamer:
         if stream_params is None:
             stream_params = {}
         self._stream_params = stream_params
-        self._chunk_size = self._device_params['chunk_size']
+        try:
+            self._chunk_size = self._device_params['chunk_size']
+        except KeyError:
+            raise ValueError("device_params must specify chunk_size")
         self._time_func = time_func
-
-        # construct LSL StreamInfo and StreamOutlet
-        self.info = lsl.StreamInfo(**stream_params, source_id='MuseNone')
-        self._add_device_info()
-        self.outlet = lsl.StreamOutlet(self.info, chunk_size=self._chunk_size,
-                                       max_buffered=360)
 
         self._init_sample()
 
@@ -84,9 +81,18 @@ class OutletStreamer:
         """Stop/pause streaming through the LSL outlet."""
         raise NotImplementedError()
 
+    def _init_lsl_outlet(self):
+        """Call in subclass after acquiring address."""
+        source_id = "{}{}".format(self._stream_params['name'], self.address)
+        self.info = lsl.StreamInfo(**self._stream_params, source_id=source_id)
+        self._add_device_info()
+        self.outlet = lsl.StreamOutlet(self.info, chunk_size=self._chunk_size,
+                                       max_buffered=360)
+
     def _init_sample(self):
-        self._timestamps = np.zeros(self.info.channel_count())
-        self._data = np.zeros((self.info.channel_count(), self._chunk_size))
+        n_chan = self._stream_params["channel_count"]
+        self._timestamps = np.zeros(n_chan)
+        self._data = np.zeros((n_chan, self._chunk_size))
 
     def _push_chunk(self, channels, timestamps):
         for sample in range(self._chunk_size):
@@ -94,15 +100,22 @@ class OutletStreamer:
 
     def _add_device_info(self):
         """Adds device-specific parameters to `info`."""
-        self.info.desc().append_child_value("manufacturer",
-                                            self._device_params["manufacturer"])
+        desc = self.info.desc()
+        try:
+            desc.append_child_value("manufacturer",
+                                    self._device_params["manufacturer"])
+        except KeyError:
+            print("Warning: Manufacturer not specified by device_params")
 
-        self.channels = self.info.desc().append_child("channels")
-        for ch_name in self._device_params["ch_names"]:
-            self.channels.append_child("channel") \
-                .append_child_value("label", ch_name) \
-                .append_child_value("unit", self._device_params["units"]) \
-                .append_child_value("type", self._stream_params["type"])
+        self.channels = desc.append_child("channels")
+        try:
+            for ch_name in self._device_params["ch_names"]:
+                self.channels.append_child("channel") \
+                    .append_child_value("label", ch_name) \
+                    .append_child_value("unit", self._device_params["units"]) \
+                    .append_child_value("type", self._stream_params["type"])
+        except KeyError:
+            raise ValueError("Channel names, units, or dtypes not specified")
 
 
 class BLEStreamer(OutletStreamer):
@@ -140,6 +153,7 @@ class BLEStreamer(OutletStreamer):
         OutletStreamer.__init__(self, device_params=device_params, **kwargs)
         self._packet_manager = PacketManager()
         self.address = address
+
         # initialize gatt adapter
         if backend == 'bgapi':
             self._adapter = pygatt.BGAPIBackend(serial_port=interface)
@@ -152,7 +166,6 @@ class BLEStreamer(OutletStreamer):
         self._backend = backend
 
         self._set_packet_format()
-        self._add_device_info()
         self._ble_params = self._device_params["ble"]
         self.initialize_timestamping()
 
@@ -231,7 +244,9 @@ class BLEStreamer(OutletStreamer):
                     .format(self.address)
                 raise(IOError(e_msg))
 
-            # subscribe to the muse channels specified by the device parameters
+        self._init_lsl_outlet()
+
+        # subscribe to the muse channels specified by the device parameters
         for uuid in self._ble_params["uuid"]:
             self._device.subscribe(uuid, callback=self._transmit_packet)
             # subscribe to recieve simblee command from ganglion doc
@@ -318,6 +333,8 @@ class DummyStreamer(OutletStreamer):
         OutletStreamer.__init__(self, device_params=device.PARAMS,
                                 stream_params=device.STREAM_PARAMS, **kwargs)
 
+        self.address = None
+        self._init_lsl_outlet()
         self._thread = threading.Thread(target=self._stream)
 
         # generate or load fake data
@@ -334,6 +351,8 @@ class DummyStreamer(OutletStreamer):
             self._thread.start()
 
     def _stream(self):
+        """Run in thread to mimic periodic hardware input."""
+        sec_per_chunk = 1 / (self._sfreq / self._chunk_size)
         while self._proceed:
             self.start_time = self._time_func()
             chunk_inds = np.arange(0, len(self._dummy_data.T),
@@ -342,7 +361,6 @@ class DummyStreamer(OutletStreamer):
                 self.make_chunk(chunk_ind)
                 self._push_chunk(self._data, self._timestamps)
                 # force sampling rate
-                sec_per_chunk = 1 / (self._sfreq / self._chunk_size)
                 time.sleep(sec_per_chunk)
 
     def gen_dummy_data(self, dur, freqs=[5, 10, 12, 20]):
