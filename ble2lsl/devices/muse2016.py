@@ -1,7 +1,9 @@
 """Interfacing parameters for the Muse headband (2016 version)."""
 
-from pygatt import BLEAddressType
 import bitstring
+import numpy as np
+from pygatt import BLEAddressType
+
 PARAMS = dict(
     manufacturer='Muse',
     units='microvolts',
@@ -9,21 +11,21 @@ PARAMS = dict(
     chunk_size=12,
     packet_dtypes=dict(index='uint:16', ch_value='uint:12'),
     ble=dict(
-        uuid=[
-            '273e0003-4c4d-454d-96be-f03bac821358',
-            '273e0004-4c4d-454d-96be-f03bac821358',
-            '273e0005-4c4d-454d-96be-f03bac821358',
-            '273e0006-4c4d-454d-96be-f03bac821358',
-            '273e0007-4c4d-454d-96be-f03bac821358',
-        ],
         address_type=BLEAddressType.public,
+        receive={'handles': [32, 35, 38, 41, 44],
+                 'last_handle': 35,
+                 'uuids': ['273e0003-4c4d-454d-96be-f03bac821358',
+                           '273e0004-4c4d-454d-96be-f03bac821358',
+                           '273e0005-4c4d-454d-96be-f03bac821358',
+                           '273e0006-4c4d-454d-96be-f03bac821358',
+                           '273e0007-4c4d-454d-96be-f03bac821358',]
+        },
         send='273e0001-4c4d-454d-96be-f03bac821358',
         stream_on=(0x02, 0x64, 0x0a),
         stream_off=(0x02, 0x68, 0x0a),
     ),
 )
 """General Muse headset parameters."""
-
 
 STREAM_PARAMS = dict(
     name='Muse',
@@ -33,16 +35,14 @@ STREAM_PARAMS = dict(
     channel_format='float32',
 )
 """Muse headset parameters for constructing `pylsl.StreamInfo`."""
-import numpy as np
+
 
 class PacketManager():
     def __init__(self, scaling_output = True):
         self.scaling_output = scaling_output
 
-    def parse(self,data,packet_format):
- 
-
-        tm, d = self._unpack_channel(data,packet_format)
+    def process_packet(self, data, packet_format):
+        tm, d = self._unpack_channel(data, packet_format)
         self.sample = [tm, d]
 
     def _unpack_channel(self, packet, packet_format):
@@ -56,5 +56,3 @@ class PacketManager():
             packet_values = 0.48828125 * (packet_values - 2048)
 
         return packet_index, packet_values
-
-

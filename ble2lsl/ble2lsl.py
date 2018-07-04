@@ -20,16 +20,15 @@ TODO:
    https://github.com/peplin/pygatt
 """
 
+import ble2lsl.utils as utils
+
+import threading
 import time
 
-import bitstring
 import numpy as np
 import pygatt
 from pygatt.backends.bgapi.exceptions import ExpectedResponseTimeout
 import pylsl as lsl
-import threading
-from pygatt.backends import BLEAddressType
-import struct
 
 
 class OutletStreamer:
@@ -132,8 +131,8 @@ class BLEStreamer(OutletStreamer):
         * move fake data generator to outside/iterator?
     """
 
-    def __init__(self, device_params, PacketManager, address=None, backend='bgapi',
-                 interface=None, autostart=True, **kwargs):
+    def __init__(self, device_params, packet_manager, address=None,
+                 backend='bgapi', interface=None, autostart=True, **kwargs):
         """Construct a `BLEStreamer` instance.
 
         Args:
@@ -151,7 +150,7 @@ class BLEStreamer(OutletStreamer):
             autostart (bool): Whether to start streaming on instantiation.
         """
         OutletStreamer.__init__(self, device_params=device_params, **kwargs)
-        self._packet_manager = PacketManager()
+        self._packet_manager = packet_manager()
         self.address = address
 
         # initialize gatt adapter
@@ -167,6 +166,8 @@ class BLEStreamer(OutletStreamer):
 
         self._set_packet_format()
         self._ble_params = self._device_params["ble"]
+        packet_handles = self._device_params["receive"]["handles"]
+        self._packet_handles = utils.invert_map(dict(enumerate(packet_handles)))
         self.initialize_timestamping()
 
         if autostart:
@@ -184,8 +185,8 @@ class BLEStreamer(OutletStreamer):
 
         return cls(device_params=device.PARAMS,
                    stream_params=device.STREAM_PARAMS,
-                   PacketManager=device.PacketManager,
-                   ** kwargs)
+                   packet_manager=device.PacketManager,
+                   **kwargs)
 
     def initialize_timestamping(self):
         """Reset the parameters for timestamp generation."""
@@ -195,14 +196,15 @@ class BLEStreamer(OutletStreamer):
 
     def start(self):
         """Start streaming by writing to the relevant GATT characteristic."""
-        self._device.char_write(
-            self._ble_params['send'], value=self._ble_params['stream_on'], wait_for_response=False)
+        self._device.char_write(self._ble_params['send'],
+                                value=self._ble_params['stream_on'],
+                                wait_for_response=False)
 
     def stop(self):
         """Stop streaming by writing to the relevant GATT characteristic."""
         self._device.char_write(self._ble_params["send"],
-                                       value=self._ble_params["stream_off"],
-                                       wait_for_response=False)
+                                value=self._ble_params["stream_off"],
+                                wait_for_response=False)
 
     def disconnect(self):
         """Disconnect from the BLE device and stop the adapter.
@@ -247,7 +249,7 @@ class BLEStreamer(OutletStreamer):
         self._init_lsl_outlet()
 
         # subscribe to the muse channels specified by the device parameters
-        for uuid in self._ble_params["uuid"]:
+        for uuid in self._ble_params["receive"]["uuids"]:
             self._device.subscribe(uuid, callback=self._transmit_packet)
             # subscribe to recieve simblee command from ganglion doc
 
@@ -264,42 +266,34 @@ class BLEStreamer(OutletStreamer):
         self._packet_format = dtypes["index"] + \
             (',' + dtypes["ch_value"]) * self._chunk_size
 
-    def _transmit_packet(self,handle,data):
+    def _transmit_packet(self, handle, data):
         """Callback function used by `pygatt` to receive BLE data."""
-        #TODO Figure out how to handle the fact that one ganglion packet has 4 channels one time point
-        # and a muse packet is 12 time points of one channel (so 5 packets need to come in to fill data), therefore this if structure is necessary
-        # to determine when to push the chunk (for the muse its when all 5 channels were sent)
+        #TODO Figure out how to handle the fact that one ganglion packet has 4
+        #channels one time point and a muse packet is 12 time points of one
+        #channel (so 5 packets need to come in to fill data), therefore this if
+        #structure is necessary to determine when to push the chunk (for the
+        #muse its when all 5 channels were sent)
         timestamp = self._time_func()
-        if self._stream_params['name']=='Ganglion':
-            self._packet_manager.parse(data)
-            sample = self._packet_manager.sample
-            tm = sample[0]
-            d = sample[1]
-            self._push_chunk(d,[timestamp])
-        elif self._stream_params['name']=='Muse':
-            index = int((handle - 32) / 3)
-            self._packet_manager.parse(data,self._packet_format)
-            sample = self._packet_manager.sample
-            tm = sample[0]
-            d = sample[1]
-            if self._last_tm == 0:
-                self._last_tm = tm - 1
-            self._data[index] = d
-            self._timestamps[index] = timestamp
-            if handle == 35:
-                if tm != self._last_tm + 1:
-                    print("Missing sample {} : {}".format(tm, self._last_tm))
-                self._last_tm = tm
+        self._packet_manager.process_packet(data, self._packet_format)
+        tm, d = self._packet_manager.sample
+        index = self._packet_handles[handle] # NOTE won't work with Ganglion...
+        if self._last_tm == 0:
+            self._last_tm = tm - 1
+        self._data[index] = d
+        self._timestamps[index] = timestamp
 
-                # sample indices
-                sample_indices = np.arange(self._chunk_size) + self._sample_index
-                self._sample_index += self._chunk_size
+        if handle == self._device_params["receive"]["last_handle"]:
+            if tm != self._last_tm + 1:
+                print("Missing sample {} : {}".format(tm, self._last_tm))
+            self._last_tm = tm
+            # sample indices
+            sample_indices = np.arange(self._chunk_size) + self._sample_index
+            self._sample_index += self._chunk_size
 
-                timestamps = sample_indices / self.info.nominal_srate() \
-                         + self.start_time
-
-                self._push_chunk(self._data, timestamps)
-                self._init_sample()
+            timestamps = sample_indices / self.info.nominal_srate() \
+                     + self.start_time
+            self._push_chunk(self._data, timestamps)
+            self._init_sample()
 
     @property
     def backend(self):
