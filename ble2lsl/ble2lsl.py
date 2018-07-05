@@ -95,7 +95,7 @@ class OutletStreamer:
 
     def _push_chunk(self, channels, timestamps):
         for sample in range(self._chunk_size):
-            self.outlet.push_sample(channels[:,sample], timestamps[sample])
+            self.outlet.push_sample(channels[:, sample], timestamps[sample])
 
     def _add_device_info(self):
         """Adds device-specific parameters to `info`."""
@@ -268,11 +268,6 @@ class BLEStreamer(OutletStreamer):
 
     def _transmit_packet(self, handle, data):
         """Callback function used by `pygatt` to receive BLE data."""
-        #TODO Figure out how to handle the fact that one ganglion packet has 4
-        #channels one time point and a muse packet is 12 time points of one
-        #channel (so 5 packets need to come in to fill data), therefore this if
-        #structure is necessary to determine when to push the chunk (for the
-        #muse its when all 5 channels were sent)
         timestamp = self._time_func()
         self._packet_manager.process_packet(data, self._packet_format)
         tm, d = self._packet_manager.sample
@@ -291,7 +286,7 @@ class BLEStreamer(OutletStreamer):
             self._sample_index += self._chunk_size
 
             timestamps = sample_indices / self.info.nominal_srate() \
-                     + self.start_time
+                         + self.start_time
             self._push_chunk(self._data, timestamps)
             self._init_sample()
 
