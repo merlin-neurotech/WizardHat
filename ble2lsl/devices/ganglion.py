@@ -1,5 +1,6 @@
 """Interfacing parameters for the OpenBCI Ganglion Board."""
 
+from ble2lsl.devices.device import PacketHandler
 from ble2lsl.utils import bad_data_size
 
 import struct
@@ -7,11 +8,10 @@ import struct
 import numpy as np
 from pygatt import BLEAddressType
 
-
 PARAMS = dict(
     manufacturer='OpenBCI',
     units='microvolts',
-    ch_names=('A', 'B', 'C', 'D'),
+    ch_names=('A', 'B', 'C', 'D'),  # placement-dependent...
     chunk_size=1,
     ble=dict(
         address_type=BLEAddressType.random,
@@ -31,7 +31,7 @@ PARAMS = dict(
 )
 """General OpenBCI Ganglion parameters, including BLE characteristics."""
 
-STREAM_PARAMS = dict(
+LSL_INFO = dict(
     name='Ganglion',
     type='EEG',
     channel_count=4,
@@ -45,10 +45,13 @@ SCALE_FACTOR_EEG = 1200 / (8388607.0 * 1.5 * 51.0)  # microvolts per count
 SCALE_FACTOR_ACCEL = 0.000016  # G per count
 
 
-class PacketManager():
-    """"""
+class GanglionPacketHandler(PacketHandler):
+    """Process packets from the OpenBCI Ganglion into chunks."""
 
-    def __init__(self, output_queue, scaling_output=True):
+    def __init__(self, output_queue, **kwargs):
+        super().__init__(device_params=PARAMS,
+                         output_queue=output_queue,
+                         **kwargs)
         # holds samples until OpenBCIBoard claims them
         # detect gaps between packets
         self._last_id = -1
@@ -58,13 +61,6 @@ class PacketManager():
         self.last_accelerometer = [0, 0, 0]
         # when the board is manually set in the right mode, impedance will be measured. 4 channels + ref
         self.last_impedance = [0, 0, 0, 0, 0]
-        self.scaling_output = scaling_output
-
-        self._data = np.zeros((STREAM_PARAMS["channel_count"],
-                               PARAMS["chunk_size"]))
-        self._sample_idxs = np.zeros(STREAM_PARAMS["channel_count"])
-
-        self._output_queue = output_queue
 
         # byte ID ranges for parsing function selection
         self.byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
@@ -73,8 +69,6 @@ class PacketManager():
                                (1, 100): self.parse_compressed_18bit,
                                (201, 205): self.parse_impedance,
                                (208, -1): self.unknown_packet_warning}
-
-        self._tmpf = open("log.txt", 'w')
 
     def process_packet(self, packet, handle):
         """Parse incoming data packet.
@@ -85,7 +79,6 @@ class PacketManager():
         for r in self.byte_id_ranges:
             if start_byte >= r[0] and start_byte <= r[1]:
                 self.byte_id_ranges[r](start_byte, packet[1:])
-                # for debugging dropped packets...
                 break
 
     def push_sample(self, sample_id, chan_data, aux_data, imp_data):
@@ -96,10 +89,7 @@ class PacketManager():
         self.update_packets_count(sample_id)
         self._sample_idxs[0] = self._count_id
         self._data[:] = chan_data.T
-
-    @property
-    def output(self):
-        return (np.copy(self._sample_idxs), np.copy(self._data))
+        self._output_queue.put(self.output)
 
     def update_packets_count(self, sample_id):
         """Update last packet ID and dropped packets"""
@@ -193,6 +183,7 @@ class PacketManager():
         self.push_sample(packet_id - 200, self.last_channel_data,
                          self.last_accelerometer, self.last_impedance)
 
+PACKET_HANDLER = GanglionPacketHandler
 
 def conv24bitsToInt(unpacked):
     """Convert 24-bit data coded on 3 bytes to a proper integer."""

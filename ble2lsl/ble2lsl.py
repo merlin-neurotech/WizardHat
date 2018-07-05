@@ -50,21 +50,21 @@ class OutletStreamer:
         * Some way to generalize autostart behaviour?
     """
 
-    def __init__(self, device_params=None, stream_params=None,
+    def __init__(self, device_params=None, lsl_info=None,
                  time_func=time.time):
         """Construct an `OutletStreamer` object.
 
         Args:
-            stream_params (dict): Parameters to construct `pylsl.StreamInfo`.
+            lsl_info (dict): Parameters to construct `pylsl.StreamInfo`.
             chunk_size (int): Number of samples pushed per LSL chunk.
             time_func (function): Function for generating timestamps.
         """
         if device_params is None:
             device_params = {}
         self._device_params = device_params
-        if stream_params is None:
-            stream_params = {}
-        self._stream_params = stream_params
+        if lsl_info is None:
+            lsl_info = {}
+        self._lsl_info = lsl_info
         try:
             self._chunk_size = self._device_params['chunk_size']
         except KeyError:
@@ -83,14 +83,14 @@ class OutletStreamer:
 
     def _init_lsl_outlet(self):
         """Call in subclass after acquiring address."""
-        source_id = "{}{}".format(self._stream_params['name'], self.address)
-        self.info = lsl.StreamInfo(**self._stream_params, source_id=source_id)
+        source_id = "{}{}".format(self._lsl_info['name'], self.address)
+        self.info = lsl.StreamInfo(**self._lsl_info, source_id=source_id)
         self._add_device_info()
         self.outlet = lsl.StreamOutlet(self.info, chunk_size=self._chunk_size,
                                        max_buffered=360)
 
     def _init_sample(self):
-        n_chan = self._stream_params["channel_count"]
+        n_chan = self._lsl_info["channel_count"]
         self._timestamps = np.zeros(n_chan)
         self._data = np.zeros((n_chan, self._chunk_size))
 
@@ -113,7 +113,7 @@ class OutletStreamer:
                 self.channels.append_child("channel") \
                     .append_child_value("label", ch_name) \
                     .append_child_value("unit", self._device_params["units"]) \
-                    .append_child_value("type", self._stream_params["type"])
+                    .append_child_value("type", self._lsl_info["type"])
         except KeyError:
             raise ValueError("Channel names, units, or dtypes not specified")
 
@@ -132,7 +132,7 @@ class BLEStreamer(OutletStreamer):
         * move fake data generator to outside/iterator?
     """
 
-    def __init__(self, device_params, packet_manager, address=None,
+    def __init__(self, device_params, packet_handler, address=None,
                  backend='bgapi', interface=None, autostart=True, **kwargs):
         """Construct a `BLEStreamer` instance.
 
@@ -140,7 +140,7 @@ class BLEStreamer(OutletStreamer):
             device_params (dict): Device-specific parameters.
                 Includes GATT handles and characteristics, channel UUIDs and
                 names, and other device metadata.
-            packet_manager (func): Device-specific byte parsing functions and algorithms
+            packet_handler (func): Device-specific byte parsing functions and algorithms
             address (str): Device MAC address for establishing connection.
                 By default, this is acquired automatically.
             backend (str): Which `pygatt` backend to use.
@@ -152,7 +152,7 @@ class BLEStreamer(OutletStreamer):
         """
         OutletStreamer.__init__(self, device_params=device_params, **kwargs)
         self._queue = queue.Queue()
-        self._packet_manager = packet_manager(self._queue)
+        self._packet_handler = packet_handler(self._queue)
         self.address = address
 
         # initialize gatt adapter
@@ -184,8 +184,8 @@ class BLEStreamer(OutletStreamer):
         """
 
         return cls(device_params=device.PARAMS,
-                   stream_params=device.STREAM_PARAMS,
-                   packet_manager=device.PacketManager,
+                   lsl_info=device.LSL_INFO,
+                   packet_handler=device.PACKET_HANDLER,
                    **kwargs)
 
     def initialize_timestamping(self):
@@ -237,7 +237,7 @@ class BLEStreamer(OutletStreamer):
 
         if self.address is None:
             # get the device address if none was provided
-            self.address = self._resolve_address(self._stream_params["name"])
+            self.address = self._resolve_address(self._lsl_info["name"])
             try:
                 self._device = self._adapter.connect(
                     self.address, address_type=self._ble_params['address_type'],
@@ -265,7 +265,7 @@ class BLEStreamer(OutletStreamer):
 
     def _packet_callback(self, handle, data):
         """Callback function used by `pygatt` to receive BLE data."""
-        self._packet_manager.process_packet(data, handle)
+        self._packet_handler.process_packet(data, handle)
 
     def _transmit_samples(self):
         while True:
@@ -317,7 +317,7 @@ class DummyStreamer(OutletStreamer):
         """
 
         OutletStreamer.__init__(self, device_params=device.PARAMS,
-                                stream_params=device.STREAM_PARAMS, **kwargs)
+                                lsl_info=device.LSL_INFO, **kwargs)
 
         self.address = None
         self._init_lsl_outlet()
@@ -325,8 +325,8 @@ class DummyStreamer(OutletStreamer):
 
         # generate or load fake data
         if csv_file is None:
-            self._sfreq = device.STREAM_PARAMS['nominal_srate']
-            self._n_chan = device.STREAM_PARAMS['channel_count']
+            self._sfreq = device.LSL_INFO['nominal_srate']
+            self._n_chan = device.LSL_INFO['channel_count']
             self._dummy_data = self.gen_dummy_data(dur)
         else:
             self.csv_file = csv_file

@@ -1,6 +1,6 @@
 """Interfacing parameters for the Muse headband (2016 version)."""
 
-from ble2lsl.utils import invert_map
+from ble2lsl.devices.device import PacketHandler
 
 import bitstring
 import numpy as np
@@ -27,7 +27,7 @@ PARAMS = dict(
 )
 """General Muse headset parameters, including BLE characteristics."""
 
-STREAM_PARAMS = dict(
+LSL_INFO = dict(
     name='Muse',
     type='EEG',
     channel_count=5,
@@ -45,15 +45,14 @@ def convert_count_to_uvolts(value):
     return 0.48828125 * (value - 2048)
 
 
-class PacketManager():
-    """"""
+class MusePacketHandler(PacketHandler):
+    """Process packets from the Muse 2016 headset into chunks.
+    """
 
-    def __init__(self, output_queue, scaling_output=True):
-        self.scaling_output = scaling_output
-        self._data = np.zeros((STREAM_PARAMS["channel_count"],
-                               PARAMS["chunk_size"]))
-        self._sample_idxs = np.zeros(STREAM_PARAMS["channel_count"])
-        self._output_queue = output_queue
+    def __init__(self, output_queue, **kwargs):
+        super().__init__(device_params=PARAMS,
+                         output_queue=output_queue,
+                         **kwargs)
 
     def process_packet(self, data, handle):
         # TODO: last handle then send (flag?)
@@ -64,9 +63,6 @@ class PacketManager():
         if handle == 35:
             self._output_queue.put(self.output)
 
-    @property
-    def output(self):
-        return (np.copy(self._sample_idxs), np.copy(self._data))
 
     def _unpack_channel(self, packet, PACKET_FORMAT):
         """Parse the bitstrings received over BLE."""
@@ -79,3 +75,5 @@ class PacketManager():
             packet_values = convert_count_to_uvolts(packet_values)
 
         return packet_index, packet_values
+
+PACKET_HANDLER = MusePacketHandler
