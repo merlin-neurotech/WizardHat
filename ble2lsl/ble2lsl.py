@@ -164,10 +164,7 @@ class BLEStreamer(OutletStreamer):
             raise(ValueError("Invalid backend specified; use bgapi or gatt."))
         self._backend = backend
 
-        self._set_packet_format()
         self._ble_params = self._device_params["ble"]
-        packet_handles = self._device_params["receive"]["handles"]
-        self._packet_handles = utils.invert_map(dict(enumerate(packet_handles)))
         self.initialize_timestamping()
 
         if autostart:
@@ -260,16 +257,10 @@ class BLEStreamer(OutletStreamer):
                 return device['address']
         raise(ValueError("No devices found with name `{}`".format(name)))
 
-    def _set_packet_format(self):
-        """Defines the format for parsing bit strings received over BLE."""
-        dtypes = self._device_params["packet_dtypes"]
-        self._packet_format = dtypes["index"] + \
-            (',' + dtypes["ch_value"]) * self._chunk_size
-
     def _transmit_packet(self, handle, data):
         """Callback function used by `pygatt` to receive BLE data."""
         timestamp = self._time_func()
-        self._packet_manager.process_packet(data, self._packet_format)
+        self._packet_manager.process_packet(data)
         tm, d = self._packet_manager.sample
         index = self._packet_handles[handle] # NOTE won't work with Ganglion...
         if self._last_tm == 0:

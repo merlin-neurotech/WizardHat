@@ -1,4 +1,6 @@
-"""Interfacing parameters for the OpenBCI Ganglion Board."""
+sample_idsample_id"""Interfacing parameters for the OpenBCI Ganglion Board."""
+
+from ble2lsl.utils import bad_data_size
 
 import numpy as np
 from pygatt import BLEAddressType
@@ -13,9 +15,7 @@ PARAMS = dict(
     ble=dict(
         address_type=BLEAddressType.random,
         service='fe84',
-        receive={'handles': [25],
-                 'last_handle': 25,
-                 'uuids': ['2d30c082f39f4ce6923f3484ea480596']},
+        receive=['2d30c082f39f4ce6923f3484ea480596'],
         send="2d30c083f39f4ce6923f3484ea480596",
         stream_on=b'b',
         stream_off=b's',
@@ -36,9 +36,8 @@ STREAM_PARAMS = dict(
 )
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
-
-scale_fac_uVolts_per_count = 1200 / (8388607.0 * 1.5 * 51.0)
-scale_fac_accel_G_per_count = 0.000016
+SCALE_FACTOR_EEG = 1200 / (8388607.0 * 1.5 * 51.0)  # microvolts per count
+SCALE_FACTOR_ACCEL = 0.000016  # G per count
 
 
 class PacketManager():
@@ -47,8 +46,7 @@ class PacketManager():
     def __init__(self, scaling_output=True):
         # holds samples until OpenBCIBoard claims them
         # detect gaps between packets
-        self.last_id = -1
-        self.packets_dropped = 0
+        self._last_id = -1
         # save uncompressed data to compute deltas
         self.last_channel_data = [0, 0, 0, 0]
         # 18bit data got here and then accelerometer with it
@@ -78,25 +76,25 @@ class PacketManager():
 
     def push_sample(self, sample_id, chan_data, aux_data, imp_data):
         """Add a sample to inner stack, setting ID and dealing with scaling if necessary. """
+        self.update_packets_count(sample_id)
         if self.scaling_output:
-            chan_data = np.array([chan_data]) * scale_fac_uVolts_per_count
-            # aux_data = np.array(aux_data) * scale_fac_accel_G_per_count
-        self.sample = [sample_id, chan_data.T]
+            chan_data = np.array([chan_data]) * SCALE_FACTOR_EEG
+            # aux_data = np.array(aux_data) * SCALE_FACTOR_ACCEL_G_per_count
+        self.sample = [self._count_id, chan_data.T]
 
-    def update_packets_count(self, packet_id):
+    def update_packets_count(self, sample_id):
         """Update last packet ID and dropped packets"""
-        if self.last_id == -1:
-            self.last_id = packet_id
-            self.packets_dropped = 0
+        if self._last_id == -1:
+            self._last_id = sample_id
+            self._count_id = 1
             return
-        # ID loops every 101 packets
-        if packet_id > self.last_id:
-            self.packets_dropped = packet_id - self.last_id - 1
+        # ID loops every 101 packets (201 samples)
+        # TODO: make sure parsing methods pass *sample* ID
+        if sample_id > self._last_id:
+            self._count_id += sample_id - self._last_id
         else:
-            self.packets_dropped = packet_id + 101 - self.last_id - 1
-        self.last_id = packet_id
-        if self.packets_dropped > 0:
-            print("Warning: dropped {} packets.".format(self.packets_dropped))
+            self._count_id += sample_id - self._last_id + 201
+        self._last_id = sample_id
 
     def unknown_packet_warning(self, start_byte, packet):
         """Print if incoming byte ID is unknown."""
@@ -124,7 +122,6 @@ class PacketManager():
         self.push_sample(packet_id, chan_data, self.last_accelerometer,
                          self.last_impedance)
         self.last_channel_data = chan_data
-        self.update_packets_count(packet_id)
 
     def update_data_with_deltas(self, packet_id, deltas):
         delta_id = 1
@@ -139,7 +136,7 @@ class PacketManager():
             self.last_channel_data = full_data
             delta_id += 1
 
-    def parse_19bit(self, packet_id, packet):
+    def parse_compressed_19bit(self, packet_id, packet):
         """Parse a 19-bit compressed packet without accelerometer data."""
         if bad_data_size(packet, 19, "19-bit compressed data"):
             return
@@ -148,7 +145,6 @@ class PacketManager():
         # should get 2 by 4 arrays of uncompressed data
         deltas = decompress_deltas_19bit(packet)
         self.update_data_with_deltas(packet_id, deltas)
-
         self.update_packets_count(packet_id)
 
     def parse_compressed_18bit(self, packet_id, packet):
@@ -162,7 +158,6 @@ class PacketManager():
         # deltas: should get 2 by 4 arrays of uncompressed data
         deltas = decompress_deltas_18bit(packet[:-1])
         self.update_data_with_deltas(packet_id, deltas)
-        self.update_packets_count(packet_id)
 
     def parse_impedance(self, packet_id, packet):
         """Parse impedance data.
@@ -178,14 +173,6 @@ class PacketManager():
         self.last_impedance[packet_id - 201] = imp_value
         self.push_sample(packet_id - 200, self.last_channel_data,
                          self.last_accelerometer, self.last_impedance)
-
-
-def bad_data_size(data, size, data_type="packet"):
-    if len(data) != size:
-        print('Wrong size for {}, {} instead of {} bytes'
-              .format(data_type, len(data), size))
-        return True
-    return False
 
 
 def conv24bitsToInt(unpacked):
