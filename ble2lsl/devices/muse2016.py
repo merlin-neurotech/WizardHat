@@ -2,6 +2,8 @@
 
 from ble2lsl.utils import invert_map
 
+from threading import Event
+
 import bitstring
 import numpy as np
 from pygatt import BLEAddressType
@@ -36,7 +38,7 @@ STREAM_PARAMS = dict(
 
 PACKET_FORMAT = 'uint:16' + (',' + 'uint:12') * PARAMS["chunk_size"]
 LAST_HANDLE = 35
-PACKET_HANDLES = {32: 1, 35: 2, 38: 3, 41: 4, 44: 5}
+PACKET_HANDLES = {32: 0, 35: 1, 38: 2, 41: 3, 44: 4}
 
 
 class PacketManager():
@@ -44,11 +46,24 @@ class PacketManager():
 
     def __init__(self, scaling_output=True):
         self.scaling_output = scaling_output
+        self._data = np.zeros((STREAM_PARAMS["channel_count"],
+                               PARAMS["chunk_size"]))
+        self._sample_idxs = np.zeros(STREAM_PARAMS["channel_count"])
 
-    def process_packet(self, data):
+        self.updated = Event()
+
+    def process_packet(self, data, handle):
         # TODO: last handle then send (flag?)
-        tm, d = self._unpack_channel(data, PACKET_FORMAT)
-        self.sample = [tm, d]
+        packet_idx, ch_values = self._unpack_channel(data, PACKET_FORMAT)
+        idx = PACKET_HANDLES[handle]
+        self._data[idx] = ch_values
+        self._sample_idxs[idx] = packet_idx
+        if handle == 35:
+            self.updated.set()
+
+    @property
+    def output(self):
+        return (np.copy(self._sample_idxs), np.copy(self._data))
 
     def _unpack_channel(self, packet, PACKET_FORMAT):
         """Parse the bitstrings received over BLE."""

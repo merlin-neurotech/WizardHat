@@ -1,17 +1,19 @@
-sample_idsample_id"""Interfacing parameters for the OpenBCI Ganglion Board."""
+"""Interfacing parameters for the OpenBCI Ganglion Board."""
 
 from ble2lsl.utils import bad_data_size
 
+import struct
+from threading import Event
+
 import numpy as np
 from pygatt import BLEAddressType
-import struct
+
 
 PARAMS = dict(
     manufacturer='OpenBCI',
     units='microvolts',
     ch_names=('A', 'B', 'C', 'D'),
-    chunk_size=2,
-    packet_dtypes=dict(index='uint:16', ch_value='uint:12'),
+    chunk_size=1,
     ble=dict(
         address_type=BLEAddressType.random,
         service='fe84',
@@ -55,15 +57,23 @@ class PacketManager():
         self.last_impedance = [0, 0, 0, 0, 0]
         self.scaling_output = scaling_output
 
-        # TODO: order in terms of probability of receiving (faster)
-        self.byte_id_ranges = {(0, 0): self.parse_uncompressed,
-                               (1, 100): self.parse_compressed_18bit,
-                               (101, 200): self.parse_compressed_19bit,
-                               (201, 205): self.parse_impedance,
+        self._data = np.zeros((STREAM_PARAMS["channel_count"],
+                               PARAMS["chunk_size"]))
+        self._sample_idxs = np.zeros(STREAM_PARAMS["channel_count"])
+
+        self.updated = Event()
+
+        # byte ID ranges for parsing function selection
+        self.byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
+                               (0, 0): self.parse_uncompressed,
                                (206, 207): self.print_ascii,
+                               (1, 100): self.parse_compressed_18bit,
+                               (201, 205): self.parse_impedance,
                                (208, -1): self.unknown_packet_warning}
 
-    def process_packet(self, packet):
+        self._tmpf = open("log.txt", 'w')
+
+    def process_packet(self, packet, handle):
         """Parse incoming data packet.
 
         Calls the corresponding parsing function depending on packet format.
@@ -72,6 +82,9 @@ class PacketManager():
         for r in self.byte_id_ranges:
             if start_byte >= r[0] and start_byte <= r[1]:
                 self.byte_id_ranges[r](start_byte, packet[1:])
+                # for debugging dropped packets...
+                # self._tmpf.write(self.byte_id_ranges[r].__name__
+                #                   + ": " + str(start_byte)+'\n')
                 break
 
     def push_sample(self, sample_id, chan_data, aux_data, imp_data):
@@ -80,7 +93,13 @@ class PacketManager():
         if self.scaling_output:
             chan_data = np.array([chan_data]) * SCALE_FACTOR_EEG
             # aux_data = np.array(aux_data) * SCALE_FACTOR_ACCEL_G_per_count
-        self.sample = [self._count_id, chan_data.T]
+        self._sample_idxs[0] = self._count_id
+        self._data[:] = chan_data.T
+        self.updated.set()
+
+    @property
+    def output(self):
+        return (np.copy(self._sample_idxs), np.copy(self._data))
 
     def update_packets_count(self, sample_id):
         """Update last packet ID and dropped packets"""

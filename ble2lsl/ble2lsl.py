@@ -166,6 +166,7 @@ class BLEStreamer(OutletStreamer):
 
         self._ble_params = self._device_params["ble"]
         self.initialize_timestamping()
+        self._update_thread = threading.Thread(target=self._transmit_samples)
 
         if autostart:
             self.connect()
@@ -188,11 +189,12 @@ class BLEStreamer(OutletStreamer):
     def initialize_timestamping(self):
         """Reset the parameters for timestamp generation."""
         self._sample_index = 0
-        self._last_tm = 0
+        self._last_idx = 0
         self.start_time = self._time_func()
 
     def start(self):
         """Start streaming by writing to the relevant GATT characteristic."""
+        self._update_thread.start()
         self._device.char_write(self._ble_params['send'],
                                 value=self._ble_params['stream_on'],
                                 wait_for_response=False)
@@ -246,8 +248,8 @@ class BLEStreamer(OutletStreamer):
         self._init_lsl_outlet()
 
         # subscribe to the muse channels specified by the device parameters
-        for uuid in self._ble_params["receive"]["uuids"]:
-            self._device.subscribe(uuid, callback=self._transmit_packet)
+        for uuid in self._ble_params["receive"]:
+            self._device.subscribe(uuid, callback=self._packet_callback)
             # subscribe to recieve simblee command from ganglion doc
 
     def _resolve_address(self, name):
@@ -257,21 +259,23 @@ class BLEStreamer(OutletStreamer):
                 return device['address']
         raise(ValueError("No devices found with name `{}`".format(name)))
 
-    def _transmit_packet(self, handle, data):
+    def _packet_callback(self, handle, data):
         """Callback function used by `pygatt` to receive BLE data."""
-        timestamp = self._time_func()
-        self._packet_manager.process_packet(data)
-        tm, d = self._packet_manager.sample
-        index = self._packet_handles[handle] # NOTE won't work with Ganglion...
-        if self._last_tm == 0:
-            self._last_tm = tm - 1
-        self._data[index] = d
-        self._timestamps[index] = timestamp
+        self._packet_manager.process_packet(data, handle)
 
-        if handle == self._device_params["receive"]["last_handle"]:
-            if tm != self._last_tm + 1:
-                print("Missing sample {} : {}".format(tm, self._last_tm))
-            self._last_tm = tm
+    def _transmit_samples(self):
+        while True:
+            self._packet_manager.updated.wait()
+            sample_idxs, data = self._packet_manager.output
+            self._packet_manager.updated.clear()
+            self._data[:, :] = data
+            chunk_idx = sample_idxs[0]
+            if self._last_idx == 0:
+                self._last_idx = chunk_idx - 1
+            if not chunk_idx == self._last_idx + 1:
+                print("Missing sample {} : {}".format(chunk_idx,
+                                                      self._last_idx))
+            self._last_idx = chunk_idx
             # sample indices
             sample_indices = np.arange(self._chunk_size) + self._sample_index
             self._sample_index += self._chunk_size
