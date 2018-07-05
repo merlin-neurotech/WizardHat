@@ -3,7 +3,6 @@
 from ble2lsl.utils import bad_data_size
 
 import struct
-from threading import Event
 
 import numpy as np
 from pygatt import BLEAddressType
@@ -17,6 +16,8 @@ PARAMS = dict(
     ble=dict(
         address_type=BLEAddressType.random,
         service='fe84',
+        interval_min=6,  # OpenBCI suggest 9
+        interval_max=11,  # suggest 10
         receive=['2d30c082f39f4ce6923f3484ea480596'],
         send="2d30c083f39f4ce6923f3484ea480596",
         stream_on=b'b',
@@ -28,6 +29,7 @@ PARAMS = dict(
         disconnect="2d30c084f39f4ce6923f3484ea480596",
     ),
 )
+"""General OpenBCI Ganglion parameters, including BLE characteristics."""
 
 STREAM_PARAMS = dict(
     name='Ganglion',
@@ -36,6 +38,7 @@ STREAM_PARAMS = dict(
     nominal_srate=200,
     channel_format='float32'
 )
+"""OpenBCI Ganglion parameters for constructing `pylsl.StreamInfo`."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
 SCALE_FACTOR_EEG = 1200 / (8388607.0 * 1.5 * 51.0)  # microvolts per count
@@ -45,7 +48,7 @@ SCALE_FACTOR_ACCEL = 0.000016  # G per count
 class PacketManager():
     """"""
 
-    def __init__(self, scaling_output=True):
+    def __init__(self, output_queue, scaling_output=True):
         # holds samples until OpenBCIBoard claims them
         # detect gaps between packets
         self._last_id = -1
@@ -61,7 +64,7 @@ class PacketManager():
                                PARAMS["chunk_size"]))
         self._sample_idxs = np.zeros(STREAM_PARAMS["channel_count"])
 
-        self.updated = Event()
+        self._output_queue = output_queue
 
         # byte ID ranges for parsing function selection
         self.byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
@@ -83,19 +86,16 @@ class PacketManager():
             if start_byte >= r[0] and start_byte <= r[1]:
                 self.byte_id_ranges[r](start_byte, packet[1:])
                 # for debugging dropped packets...
-                # self._tmpf.write(self.byte_id_ranges[r].__name__
-                #                   + ": " + str(start_byte)+'\n')
                 break
 
     def push_sample(self, sample_id, chan_data, aux_data, imp_data):
         """Add a sample to inner stack, setting ID and dealing with scaling if necessary. """
-        self.update_packets_count(sample_id)
         if self.scaling_output:
             chan_data = np.array([chan_data]) * SCALE_FACTOR_EEG
             # aux_data = np.array(aux_data) * SCALE_FACTOR_ACCEL_G_per_count
+        self.update_packets_count(sample_id)
         self._sample_idxs[0] = self._count_id
         self._data[:] = chan_data.T
-        self.updated.set()
 
     @property
     def output(self):
@@ -109,6 +109,7 @@ class PacketManager():
             return
         # ID loops every 101 packets (201 samples)
         # TODO: make sure parsing methods pass *sample* ID
+        #print("a: ", sample_id, self._last_id, self._count_id, '\n')
         if sample_id > self._last_id:
             self._count_id += sample_id - self._last_id
         else:
@@ -164,7 +165,6 @@ class PacketManager():
         # should get 2 by 4 arrays of uncompressed data
         deltas = decompress_deltas_19bit(packet)
         self.update_data_with_deltas(packet_id, deltas)
-        self.update_packets_count(packet_id)
 
     def parse_compressed_18bit(self, packet_id, packet):
         """ Dealing with "18-bit compression without Accelerometer" """

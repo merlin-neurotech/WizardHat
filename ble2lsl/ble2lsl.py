@@ -23,6 +23,7 @@ TODO:
 import ble2lsl.utils as utils
 
 import threading
+import queue
 import time
 
 import numpy as np
@@ -150,7 +151,8 @@ class BLEStreamer(OutletStreamer):
             autostart (bool): Whether to start streaming on instantiation.
         """
         OutletStreamer.__init__(self, device_params=device_params, **kwargs)
-        self._packet_manager = packet_manager()
+        self._queue = queue.Queue()
+        self._packet_manager = packet_manager(self._queue)
         self.address = address
 
         # initialize gatt adapter
@@ -238,7 +240,9 @@ class BLEStreamer(OutletStreamer):
             self.address = self._resolve_address(self._stream_params["name"])
             try:
                 self._device = self._adapter.connect(
-                    self.address, address_type=self._ble_params['address_type'])
+                    self.address, address_type=self._ble_params['address_type'],
+                    interval_min=self._ble_params['interval_min'],
+                    interval_max=self._ble_params['interval_max'])
 
             except pygatt.exceptions.NotConnectedError:
                 e_msg = "Unable to connect to device at address {}" \
@@ -247,7 +251,7 @@ class BLEStreamer(OutletStreamer):
 
         self._init_lsl_outlet()
 
-        # subscribe to the muse channels specified by the device parameters
+        # subscribe to receive characteristic notifications
         for uuid in self._ble_params["receive"]:
             self._device.subscribe(uuid, callback=self._packet_callback)
             # subscribe to recieve simblee command from ganglion doc
@@ -265,9 +269,7 @@ class BLEStreamer(OutletStreamer):
 
     def _transmit_samples(self):
         while True:
-            self._packet_manager.updated.wait()
-            sample_idxs, data = self._packet_manager.output
-            self._packet_manager.updated.clear()
+            sample_idxs, data = self._queue.get()
             self._data[:, :] = data
             chunk_idx = sample_idxs[0]
             if self._last_idx == 0:
@@ -283,7 +285,7 @@ class BLEStreamer(OutletStreamer):
             timestamps = sample_indices / self.info.nominal_srate() \
                          + self.start_time
             self._push_chunk(self._data, timestamps)
-            self._init_sample()
+            #self._init_sample()
 
     @property
     def backend(self):
