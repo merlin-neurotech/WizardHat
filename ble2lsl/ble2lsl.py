@@ -45,26 +45,18 @@ class OutletStreamer:
         outlet (pylsl.StreamOutlet): LSL outlet to which data is pushed.
 
     TODO:
-        * get source_id... serial number from Muse? MAC address?
         * Implement with abc.ABC
-        * Some way to generalize autostart behaviour?
     """
 
-    def __init__(self, device_params=None, lsl_info=None,
-                 time_func=time.time):
+    def __init__(self, device, time_func=time.time):
         """Construct an `OutletStreamer` object.
 
         Args:
-            lsl_info (dict): Parameters to construct `pylsl.StreamInfo`.
-            chunk_size (int): Number of samples pushed per LSL chunk.
+            device: A device module in `ble2lsl.devices`.
             time_func (function): Function for generating timestamps.
         """
-        if device_params is None:
-            device_params = {}
-        self._device_params = device_params
-        if lsl_info is None:
-            lsl_info = {}
-        self._lsl_info = lsl_info
+        self._device_params = device.PARAMS
+        self._lsl_info = device.LSL_INFO
         try:
             self._chunk_size = self._device_params['chunk_size']
         except KeyError:
@@ -132,27 +124,26 @@ class BLEStreamer(OutletStreamer):
         * move fake data generator to outside/iterator?
     """
 
-    def __init__(self, device_params, packet_handler, address=None,
-                 backend='bgapi', interface=None, autostart=True, **kwargs):
-        """Construct a `BLEStreamer` instance.
+    def __init__(self, device, address=None, backend='bgapi', interface=None,
+                 autostart=True, **kwargs):
+        """Construct a `BLEStreamer` instance for a given device.
 
         Args:
-            device_params (dict): Device-specific parameters.
-                Includes GATT handles and characteristics, channel UUIDs and
-                names, and other device metadata.
-            packet_handler (func): Device-specific byte parsing functions and algorithms
+            device (dict):  A device module in `ble2lsl.devices`.
+                For example, `ble2lsl.devices.muse2016`.
+                Provides info on BLE characteristics and device metadata.
             address (str): Device MAC address for establishing connection.
-                By default, this is acquired automatically.
+                By default, this is acquired automatically using device name.
             backend (str): Which `pygatt` backend to use.
                 Allowed values are `'bgapi'` or `'gatt'`. The `'gatt'` backend
-                only works on Linux.
+                only works on Linux under the BlueZ protocol stack.
             interface (str): The identifier for the BLE adapter interface.
                 When `backend='gatt'`, defaults to `'hci0'`.
             autostart (bool): Whether to start streaming on instantiation.
         """
-        OutletStreamer.__init__(self, device_params=device_params, **kwargs)
+        OutletStreamer.__init__(self, device=device, **kwargs)
         self._queue = queue.Queue()
-        self._packet_handler = packet_handler(self._queue)
+        self._packet_handler = device.PACKET_HANDLER(self._queue)
         self.address = address
 
         # initialize gatt adapter
@@ -173,20 +164,6 @@ class BLEStreamer(OutletStreamer):
         if autostart:
             self.connect()
             self.start()
-
-    @classmethod
-    def from_device(cls, device, **kwargs):
-        """Construct a `DeviceStreamer` from a device in `ble2lsl.devices`.
-
-        Args:
-           device: A device module in `ble2lsl.devices`.
-               For example, `ble2lsl.devices.muse2016`.
-        """
-
-        return cls(device_params=device.PARAMS,
-                   lsl_info=device.LSL_INFO,
-                   packet_handler=device.PACKET_HANDLER,
-                   **kwargs)
 
     def initialize_timestamping(self):
         """Reset the parameters for timestamp generation."""
@@ -282,10 +259,10 @@ class BLEStreamer(OutletStreamer):
             sample_indices = np.arange(self._chunk_size) + self._sample_index
             self._sample_index += self._chunk_size
 
+            # generate timestamps based on start time and nominal sample rate
             timestamps = sample_indices / self.info.nominal_srate() \
                          + self.start_time
             self._push_chunk(self._data, timestamps)
-            #self._init_sample()
 
     @property
     def backend(self):
@@ -316,8 +293,7 @@ class DummyStreamer(OutletStreamer):
             autostart (bool): Whether to start streaming on instantiation.
         """
 
-        OutletStreamer.__init__(self, device_params=device.PARAMS,
-                                lsl_info=device.LSL_INFO, **kwargs)
+        OutletStreamer.__init__(self, device=device, **kwargs)
 
         self.address = None
         self._init_lsl_outlet()

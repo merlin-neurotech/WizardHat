@@ -71,7 +71,7 @@ class GanglionPacketHandler(PacketHandler):
                                (208, -1): self.unknown_packet_warning}
 
     def process_packet(self, packet, handle):
-        """Parse incoming data packet.
+        """Process incoming data packet.
 
         Calls the corresponding parsing function depending on packet format.
         """
