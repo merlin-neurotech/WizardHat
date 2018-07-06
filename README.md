@@ -4,6 +4,17 @@ WizardHat is a library for the streaming and handling of EEG data from consumer-
 
 For first time python users, please refer to our [beginner's guide](https://docs.google.com/document/d/1q9CNgSgUsNCRasLZtZ7D-2JpB7OcNvSsS3X1a1zHK-U/edit?usp=sharing) on how to set install everything from scratch. WizardHat's documentation can be found [here](https://docs.google.com/document/d/1dOymsVdVxN3SgN3mRIzHV1xmjpIjEvz5QSDIQ66D6To/edit?usp=sharing).
 
+## Note : Active Development
+Our dedicated team at Merlin Neurotech is continously working to improve WizardHat and add new functionality.
+Current on-going projects:
+- OpenBCI Ganglion Support
+- Frequency Spectrum Data Class
+- MNE Library Compatibility
+- Implementing simple filters
+- Power spectrum transformer
+
+Check back soon if the feature you are looking for is under development!
+
 ## Getting Started
 
 To set up WizardHat, begin by cloning this repository on your local environment. Once cloned, ensure you are in a new virtual environment and download the required depencies.

@@ -1,5 +1,5 @@
 
-"""Use of `ble2lsl.DummyStreamer` to mimic a device.
+"""Use of `ble2lsl.Dummy` to mimic a device.
 
 The dummy LSL outlet is passed random samples, but mimics the number of
 channels, nominal sample rate, and metadata for the device (Muse 2016
@@ -13,7 +13,7 @@ from vispy import app
 
 if __name__ == '__main__':
     # create dummy LSL outlet mimicking Muse 2016 info
-    dummy = ble2lsl.DummyStreamer(muse2016)
+    dummy = ble2lsl.Dummy(muse2016)
 
     # connect LSL inlet to dummy outlet
     streamer = acquire.LSLStreamer()
