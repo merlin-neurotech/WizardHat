@@ -9,7 +9,7 @@ from vispy import app
 
 if __name__ == '__main__':
     # connect to Muse headset and stream samples through LSL outlet
-    outlet_streamer = ble2lsl.BLEStreamer.from_device(muse2016)
+    outlet_streamer = ble2lsl.Streamer.from_device(muse2016)
     
     # automatically resolve and connect to LSL outlet and store samples in an
     # instance of wizardhat.data.TimeSeries (the attribute streamer.data),

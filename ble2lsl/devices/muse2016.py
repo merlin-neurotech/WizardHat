@@ -1,6 +1,6 @@
 """Interfacing parameters for the Muse headband (2016 version)."""
 
-from ble2lsl.devices.device import PacketHandler
+from ble2lsl.devices.device import BasePacketHandler
 
 import bitstring
 import numpy as np
@@ -45,7 +45,7 @@ def convert_count_to_uvolts(value):
     return 0.48828125 * (value - 2048)
 
 
-class MusePacketHandler(PacketHandler):
+class PacketHandler(BasePacketHandler):
     """Process packets from the Muse 2016 headset into chunks.
     """
 
@@ -75,5 +75,3 @@ class MusePacketHandler(PacketHandler):
             packet_values = convert_count_to_uvolts(packet_values)
 
         return packet_index, packet_values
-
-PACKET_HANDLER = MusePacketHandler

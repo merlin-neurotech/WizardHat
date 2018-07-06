@@ -5,7 +5,7 @@ Interfacing with devices over Bluetooth Low Energy (BLE) is achieved using the
 Reading and writing of GATT descriptors is provided by the `pygatt`_ module.
 
 All classes streaming data through an LSL outlet should subclass
-`OutletStreamer`.
+`BaseStreamer`.
 
 Also includes dummy streamer objects, which do not acquire data over BLE but
 pass local data through an LSL outlet, e.g. for testing.
@@ -20,8 +20,6 @@ TODO:
    https://github.com/peplin/pygatt
 """
 
-import ble2lsl.utils as utils
-
 import threading
 import queue
 import time
@@ -32,7 +30,7 @@ from pygatt.backends.bgapi.exceptions import ExpectedResponseTimeout
 import pylsl as lsl
 
 
-class OutletStreamer:
+class BaseStreamer:
     """Base class for streaming data through an LSL outlet.
 
     Prepares `pylsl.StreamInfo` and `pylsl.StreamOutlet` objects as well as
@@ -49,7 +47,7 @@ class OutletStreamer:
     """
 
     def __init__(self, device, time_func=time.time):
-        """Construct an `OutletStreamer` object.
+        """Construct a `BaseStreamer` object.
 
         Args:
             device: A device module in `ble2lsl.devices`.
@@ -110,7 +108,7 @@ class OutletStreamer:
             raise ValueError("Channel names, units, or dtypes not specified")
 
 
-class BLEStreamer(OutletStreamer):
+class Streamer(BaseStreamer):
     """Streams data to an LSL outlet from a BLE device.
 
     Attributes:
@@ -126,7 +124,7 @@ class BLEStreamer(OutletStreamer):
 
     def __init__(self, device, address=None, backend='bgapi', interface=None,
                  autostart=True, **kwargs):
-        """Construct a `BLEStreamer` instance for a given device.
+        """Construct a `Streamer` instance for a given device.
 
         Args:
             device (dict):  A device module in `ble2lsl.devices`.
@@ -141,9 +139,9 @@ class BLEStreamer(OutletStreamer):
                 When `backend='gatt'`, defaults to `'hci0'`.
             autostart (bool): Whether to start streaming on instantiation.
         """
-        OutletStreamer.__init__(self, device=device, **kwargs)
+        BaseStreamer.__init__(self, device=device, **kwargs)
         self._queue = queue.Queue()
-        self._packet_handler = device.PACKET_HANDLER(self._queue)
+        self._packet_handler = device.PacketHandler(self._queue)
         self.address = address
 
         # initialize gatt adapter
@@ -270,7 +268,7 @@ class BLEStreamer(OutletStreamer):
         return self._backend
 
 
-class DummyStreamer(OutletStreamer):
+class Dummy(BaseStreamer):
     """Streams data over an LSL outlet from a local source.
 
     Attributes:
@@ -283,7 +281,7 @@ class DummyStreamer(OutletStreamer):
 
     def __init__(self, device, dur=60, csv_file=None, autostart=True,
                  **kwargs):
-        """Construct a `DummyStreamer` instance.
+        """Construct a `Dummy` instance.
 
         Attributes:
             device: BLE device to impersonate (i.e. from `ble2lsl.devices`).
@@ -293,7 +291,7 @@ class DummyStreamer(OutletStreamer):
             autostart (bool): Whether to start streaming on instantiation.
         """
 
-        OutletStreamer.__init__(self, device=device, **kwargs)
+        BaseStreamer.__init__(self, device=device, **kwargs)
 
         self.address = None
         self._init_lsl_outlet()
@@ -329,7 +327,7 @@ class DummyStreamer(OutletStreamer):
         """Generate noisy sinusoidal dummy samples.
 
         TODO:
-            * becomes external when passing an iterator to `DummyStreamer`
+            * becomes external when passing an iterator to `Dummy`
         """
         n_samples = dur * self._sfreq
         x = np.arange(0, n_samples)

@@ -42,10 +42,11 @@ these tuples should be as described in the abstract class in this module.
 import numpy as np
 
 
-class PacketHandler:
+class BasePacketHandler:
     """Abstract parent for device-specific packet manager classes."""
 
-    def __init__(self, device_params, output_queue, **kwargs):
+    def __init__(self, device_params, output_queue, data_dtype=np.float32,
+                 **kwargs):
         """Construct a `PacketHandler` instance.
 
         Args:
@@ -53,7 +54,8 @@ class PacketHandler:
             output_queue (queue.Queue): Queue for putting processed data.
         """
         n_chan = len(device_params["ch_names"])
-        self._data = np.zeros((n_chan, device_params["chunk_size"]))
+        self._data = np.zeros((n_chan, device_params["chunk_size"]),
+                              dtype=data_dtype)
         self._sample_idxs = np.zeros(n_chan)
 
         self._output_queue = output_queue

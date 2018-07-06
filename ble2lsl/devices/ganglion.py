@@ -1,6 +1,6 @@
 """Interfacing parameters for the OpenBCI Ganglion Board."""
 
-from ble2lsl.devices.device import PacketHandler
+from ble2lsl.devices.device import BasePacketHandler
 from ble2lsl.utils import bad_data_size
 
 import struct
@@ -45,7 +45,7 @@ SCALE_FACTOR_EEG = 1200 / (8388607.0 * 1.5 * 51.0)  # microvolts per count
 SCALE_FACTOR_ACCEL = 0.000016  # G per count
 
 
-class GanglionPacketHandler(PacketHandler):
+class PacketHandler(BasePacketHandler):
     """Process packets from the OpenBCI Ganglion into chunks."""
 
     def __init__(self, output_queue, **kwargs):
@@ -55,8 +55,6 @@ class GanglionPacketHandler(PacketHandler):
         # holds samples until OpenBCIBoard claims them
         # detect gaps between packets
         self._last_id = -1
-        # save uncompressed data to compute deltas
-        self.last_channel_data = [0, 0, 0, 0]
         # 18bit data got here and then accelerometer with it
         self.last_accelerometer = [0, 0, 0]
         # when the board is manually set in the right mode, impedance will be measured. 4 channels + ref
@@ -84,11 +82,11 @@ class GanglionPacketHandler(PacketHandler):
     def push_sample(self, sample_id, chan_data, aux_data, imp_data):
         """Add a sample to inner stack, setting ID and dealing with scaling if necessary. """
         if self.scaling_output:
-            chan_data = np.array([chan_data]) * SCALE_FACTOR_EEG
+            chan_data *= SCALE_FACTOR_EEG
             # aux_data = np.array(aux_data) * SCALE_FACTOR_ACCEL_G_per_count
         self.update_packets_count(sample_id)
         self._sample_idxs[0] = self._count_id
-        self._data[:] = chan_data.T
+        self._data[:] = chan_data
         self._output_queue.put(self.output)
 
     def update_packets_count(self, sample_id):
@@ -124,27 +122,22 @@ class GanglionPacketHandler(PacketHandler):
         """Parse a raw uncompressed packet."""
         if bad_data_size(packet, 19, "uncompressed data"):
             return
-
         # 4 channels of 24bits, take values one by one
-        chan_data = [conv24bitsToInt(packet[i:i+3]) for i in range(0, 12, 3)]
-
+        chan_data = [int_from_24bits(packet[i:i+3]) for i in range(0, 12, 3)]
+        chan_data = np.array([chan_data], dtype=np.float32).T
         # save uncompressed raw channel for future use and append whole sample
         self.push_sample(packet_id, chan_data, self.last_accelerometer,
                          self.last_impedance)
-        self.last_channel_data = chan_data
 
     def update_data_with_deltas(self, packet_id, deltas):
-        delta_id = 1
-        for delta in deltas:
+        for delta_id in [0, 1]:
             # convert from packet to sample ID
-            sample_id = (packet_id - 1) * 2 + delta_id
+            sample_id = (packet_id - 1) * 2 + delta_id + 1
             # 19bit packets hold deltas between two samples
             # TODO: use more broadly numpy
-            full_data = list(np.array(self.last_channel_data) - np.array(delta))
-            self.push_sample(sample_id, full_data, self.last_accelerometer,
+            chan_data = self._data - deltas[delta_id, :].reshape(4, 1)
+            self.push_sample(sample_id, chan_data, self.last_accelerometer,
                              self.last_impedance)
-            self.last_channel_data = full_data
-            delta_id += 1
 
     def parse_compressed_19bit(self, packet_id, packet):
         """Parse a 19-bit compressed packet without accelerometer data."""
@@ -180,12 +173,10 @@ class GanglionPacketHandler(PacketHandler):
         imp_value = int(packet[:-2])
         # from 201 to 205 codes to the right array size
         self.last_impedance[packet_id - 201] = imp_value
-        self.push_sample(packet_id - 200, self.last_channel_data,
+        self.push_sample(packet_id - 200, self._data,
                          self.last_accelerometer, self.last_impedance)
 
-PACKET_HANDLER = GanglionPacketHandler
-
-def conv24bitsToInt(unpacked):
+def int_from_24bits(unpacked):
     """Convert 24-bit data coded on 3 bytes to a proper integer."""
     if bad_data_size(unpacked, 3, "3-byte buffer"):
         raise ValueError("Bad input size for byte conversion.")
@@ -253,8 +244,7 @@ def decompress_deltas_19bit(buffer):
     if bad_data_size(buffer, 19, "19-byte compressed packet"):
         raise ValueError("Bad input size for byte conversion.")
 
-    deltas = [[0, 0, 0, 0],
-              [0, 0, 0, 0]]
+    deltas = np.zeros((2, 4))
 
     # Sample 1 - Channel 1
     minibuf = [(buffer[0] >> 5),
@@ -313,8 +303,7 @@ def decompress_deltas_18bit(buffer):
     if bad_data_size(buffer, 18, "18-byte compressed packet"):
         raise ValueError("Bad input size for byte conversion.")
 
-    deltas = [[0, 0, 0, 0],
-              [0, 0, 0, 0]]
+    deltas = np.zeros((2, 4))
 
     # Sample 1 - Channel 1
     minibuf = [(buffer[0] >> 6),
