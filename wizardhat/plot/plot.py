@@ -30,7 +30,7 @@ from bokeh.palettes import all_palettes as palettes
 from bokeh.plotting import figure
 from bokeh.server.server import Server
 from tornado import gen
-
+import time
 
 class Plotter():
     """Base class for plotting."""
@@ -72,7 +72,7 @@ class Lines():
         self.data = data
 
         # TODO: initialize with existing samples in self.data.data
-        data_dict = {name: self.data.data[name][:n_samples]
+        data_dict = {name:[]#[self.data.data[name][:n_samples]]
                      for name in self.data.dtype.names}
         self._source = ColumnDataSource(data_dict)
         self.server = Server({'/': self._app_manager})
@@ -122,6 +122,9 @@ class Lines():
         self._source.stream(data_dict, self._n_samples)
 
     def _get_new_samples(self):
+        #TODO Time delay of 1 second is necessary because there seems to be plotting issue related to server booting
+        #time delay allows the server to boot before samples get sent to it. 
+        time.sleep(1)
         while True:
             self.data.updated.wait()
             data_dict = {name: self.data.last_samples[name]
