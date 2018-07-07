@@ -2,6 +2,8 @@
 
 from ble2lsl.devices.device import BasePacketHandler
 
+import ast
+
 import bitstring
 import numpy as np
 from pygatt import BLEAddressType
@@ -45,9 +47,22 @@ LSL_INFO = dict(
 )
 """Muse headset parameters for constructing `pylsl.StreamInfo`."""
 
-PACKET_FORMAT = 'uint:16' + ',uint:12' * PARAMS["chunk_size"]
-HANDLE_CH_IDXS = {32: 0, 35: 1, 38: 2, 41: 3, 44: 4}
-HANDLE_RECEIVE_ORDER = [44, 41, 38, 32, 35]
+# TODO: dict of packet formats
+CH_PACKET_FORMAT = 'uint:16' + ',uint:12' * PARAMS["chunk_size"]
+CH_HANDLE_IDXS = {32: 0, 35: 1, 38: 2, 41: 3, 44: 4}
+CH_HANDLE_RECEIVE_ORDER = [44, 41, 38, 32, 35]
+
+STATUS_PACKET_FORMAT = ','.join(['uint:8'] * 20)
+STATUS_HANDLE = 14
+
+TELEMETRY_PACKET_FORMAT = ','.join(['uint:16'] * 5)
+TELEMETRY_HANDLE = 26
+
+IMU_PACKET_FORMAT = 'uint:16' + ',int:16' * 9
+ACCEL_HANDLE = 23
+SCALE_FACTOR_ACCEL = 0.0000610352
+GYRO_HANDLE = 20
+SCALE_FACTOR_GYRO = 0.0074768
 
 
 def convert_count_to_uvolts(value):
@@ -56,30 +71,81 @@ def convert_count_to_uvolts(value):
 
 class PacketHandler(BasePacketHandler):
     """Process packets from the Muse 2016 headset into chunks.
+
+    TODO:
+        * Try callbacks instead of queues, and infer subscriptions
+        * Timestamps for all subscriptions
+        * better elif mechanism/generalization in process_packet: handle-method mapping
     """
 
-    def __init__(self, output_queue, **kwargs):
+    def __init__(self, output_queue, subscribes, **kwargs):
         super().__init__(device_params=PARAMS,
                          output_queue=output_queue,
                          **kwargs)
+        self.subscribes = subscribes
+        self._queues = {}
+        self._message = ""
 
-    def process_packet(self, data, handle):
-        # TODO: last handle then send (flag?)
-        packet_idx, ch_values = self._unpack_channel(data, PACKET_FORMAT)
-        idx = HANDLE_CH_IDXS[handle]
-        self._data[idx] = ch_values
-        self._sample_idxs[idx] = packet_idx
-        if handle == HANDLE_RECEIVE_ORDER[-1]:
-            self._output_queue.put(self.output)
+    def process_packet(self, packet, handle):
+        """TODO: """
+        if handle in CH_HANDLE_RECEIVE_ORDER:
+            packet_idx, ch_values = self._unpack_channel(packet)
+            idx = CH_HANDLE_IDXS[handle]
+            self._data[idx] = ch_values
+            self._sample_idxs[idx] = packet_idx
+            if handle == CH_HANDLE_RECEIVE_ORDER[-1]:
+                self._queues["channel"].put(self.output)
+        elif handle == STATUS_HANDLE and self.subscribes["status"]:
+            status_message_partial = self._unpack_status(packet)
+            self._message += status_message_partial
+            if status_message_partial[-1] == '}':
+                self._message = self._message.replace('\n', '')
+                # parse and enqueue dict
+                self._queues["status"].put(ast.literal_eval(self._message))
+                self._message = ""
+        elif handle == TELEMETRY_HANDLE and self.subscribes["telemetry"]:
+            telemetry = self._unpack_telemetry(packet)
+            self._queues["telemetry"].put(telemetry)
+        elif handle == ACCEL_HANDLE and self.subscribes["accelerometer"]:
+            packet_index, samples = self._unpack_imu(packet)
+            samples *= SCALE_FACTOR_ACCEL
+            self._queues["accelerometer"].put((packet_index, samples))
+        elif handle == GYRO_HANDLE and self.subscribes["gyroscope"]:
+            packet_index, samples = self._unpack_imu(packet)
+            samples *= SCALE_FACTOR_GYRO
+            self._queues["gyroscope"].put((packet_index, samples))
 
-    def _unpack_channel(self, packet, PACKET_FORMAT):
+    def _unpack_channel(self, packet):
         """Parse the bitstrings received over BLE."""
-        packet_bits = bitstring.Bits(bytes=packet)
-        unpacked = packet_bits.unpack(PACKET_FORMAT)
-
+        unpacked = _unpack(packet, CH_PACKET_FORMAT)
         packet_index = unpacked[0]
         packet_values = np.array(unpacked[1:])
         if self.scaling_output:
             packet_values = convert_count_to_uvolts(packet_values)
 
         return packet_index, packet_values
+
+    def _unpack_imu(self, packet):
+        unpacked = _unpack(packet, IMU_PACKET_FORMAT)
+        packet_index = unpacked[0]
+        samples = np.array(unpacked[1]).reshape((3, 3))
+        return packet_index, samples
+
+    def _unpack_status(self, packet):
+        unpacked = _unpack(packet, STATUS_PACKET_FORMAT)
+        status_message = "".join(chr(i) for i in unpacked[1:])[:unpacked[0]]
+        return status_message
+
+    def _unpack_telemetry(self, packet):
+        unpacked = _unpack(packet, TELEMETRY_PACKET_FORMAT)
+        telemetry = {"battery": unpacked[1] / 512,
+                     "fuel_gauge": unpacked[2] * 2.2,
+                     "adc_volt": unpacked[3],
+                     "temperature": unpacked[4]}
+        return telemetry
+
+
+def _unpack(packet, packet_format):
+    packet_bits = bitstring.Bits(bytes=packet)
+    unpacked = packet_bits.unpack(packet_format)
+    return unpacked
