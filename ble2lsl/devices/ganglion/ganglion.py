@@ -61,7 +61,7 @@ class PacketHandler(BasePacketHandler):
         self.last_impedance = [0, 0, 0, 0, 0]
 
         # byte ID ranges for parsing function selection
-        self.byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
+        self._byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
                                (0, 0): self.parse_uncompressed,
                                (206, 207): self.print_ascii,
                                (1, 100): self.parse_compressed_18bit,
@@ -74,9 +74,9 @@ class PacketHandler(BasePacketHandler):
         Calls the corresponding parsing function depending on packet format.
         """
         start_byte = packet[0]
-        for r in self.byte_id_ranges:
+        for r in self._byte_id_ranges:
             if start_byte >= r[0] and start_byte <= r[1]:
-                self.byte_id_ranges[r](start_byte, packet[1:])
+                self._byte_id_ranges[r](start_byte, packet[1:])
                 break
 
     def push_sample(self, sample_id, chan_data, aux_data, imp_data):
@@ -96,8 +96,6 @@ class PacketHandler(BasePacketHandler):
             self._count_id = 1
             return
         # ID loops every 101 packets (201 samples)
-        # TODO: make sure parsing methods pass *sample* ID
-        #print("a: ", sample_id, self._last_id, self._count_id, '\n')
         if sample_id > self._last_id:
             self._count_id += sample_id - self._last_id
         else:

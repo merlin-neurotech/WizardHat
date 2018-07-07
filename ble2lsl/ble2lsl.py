@@ -123,7 +123,7 @@ class Streamer(BaseStreamer):
     """
 
     def __init__(self, device, address=None, backend='bgapi', interface=None,
-                 autostart=True, **kwargs):
+                 autostart=True, scan_timeout=10.5, **kwargs):
         """Construct a `Streamer` instance for a given device.
 
         Args:
@@ -138,6 +138,7 @@ class Streamer(BaseStreamer):
             interface (str): The identifier for the BLE adapter interface.
                 When `backend='gatt'`, defaults to `'hci0'`.
             autostart (bool): Whether to start streaming on instantiation.
+            scan_timeout (float): Seconds before timeout of BLE adapter scan.
         """
         BaseStreamer.__init__(self, device=device, **kwargs)
         self._queue = queue.Queue()
@@ -154,6 +155,7 @@ class Streamer(BaseStreamer):
         else:
             raise(ValueError("Invalid backend specified; use bgapi or gatt."))
         self._backend = backend
+        self._scan_timeout = scan_timeout
 
         self._ble_params = self._device_params["ble"]
         self.initialize_timestamping()
@@ -214,8 +216,8 @@ class Streamer(BaseStreamer):
             # get the device address if none was provided
             self.address = self._resolve_address(self._lsl_info["name"])
             try:
-                self._device = self._adapter.connect(
-                    self.address, address_type=self._ble_params['address_type'],
+                self._device = self._adapter.connect(self.address,
+                    address_type=self._ble_params['address_type'],
                     interval_min=self._ble_params['interval_min'],
                     interval_max=self._ble_params['interval_max'])
 
@@ -232,7 +234,7 @@ class Streamer(BaseStreamer):
             # subscribe to recieve simblee command from ganglion doc
 
     def _resolve_address(self, name):
-        list_devices = self._adapter.scan(timeout=10.5)
+        list_devices = self._adapter.scan(timeout=self._scan_timeout)
         for device in list_devices:
             if name in device['name']:
                 return device['address']
@@ -243,6 +245,7 @@ class Streamer(BaseStreamer):
         self._packet_handler.process_packet(data, handle)
 
     def _transmit_samples(self):
+        """TODO: missing chunk vs. missing sample"""
         while True:
             sample_idxs, data = self._queue.get()
             self._data[:, :] = data
