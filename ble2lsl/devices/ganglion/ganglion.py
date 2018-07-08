@@ -62,11 +62,11 @@ class PacketHandler(BasePacketHandler):
 
         # byte ID ranges for parsing function selection
         self._byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
-                               (0, 0): self.parse_uncompressed,
-                               (206, 207): self.print_ascii,
-                               (1, 100): self.parse_compressed_18bit,
-                               (201, 205): self.parse_impedance,
-                               (208, -1): self.unknown_packet_warning}
+                                (0, 0): self.parse_uncompressed,
+                                (206, 207): self.print_ascii,
+                                (1, 100): self.parse_compressed_18bit,
+                                (201, 205): self.parse_impedance,
+                                (208, -1): self.unknown_packet_warning}
 
     def process_packet(self, packet, handle):
         """Process incoming data packet.

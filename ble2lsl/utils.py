@@ -8,8 +8,16 @@ def invert_map(dict_):
 
 
 def bad_data_size(data, size, data_type="packet"):
+    """Return `True` if length of `data` is not `size`."""
     if len(data) != size:
         print('Wrong size for {}, {} instead of {} bytes'
               .format(data_type, len(data), size))
         return True
     return False
+
+
+def dict_partial_from_keys(keys):
+    """Return a function that constructs a dict with predetermined keys."""
+    def dict_partial(values):
+        return dict(zip(keys, values))
+    return dict_partial

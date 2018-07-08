@@ -45,7 +45,7 @@ import numpy as np
 class BasePacketHandler:
     """Abstract parent for device-specific packet manager classes."""
 
-    def __init__(self, device_params, output_queue, data_dtype=np.float32,
+    def __init__(self, device_params, callback, subscriptions,
                  **kwargs):
         """Construct a `PacketHandler` instance.
 
@@ -53,23 +53,19 @@ class BasePacketHandler:
             device_params (dict): Device-specific parameters.
             output_queue (queue.Queue): Queue for putting processed data.
         """
-        n_chan = len(device_params["ch_names"])
-        self._data = np.zeros((n_chan, device_params["chunk_size"]),
-                              dtype=data_dtype)
-        self._sample_idxs = np.zeros(n_chan)
+        self._chunks = {}
+        self._sample_idxs = {}
+        for name in subscriptions:
+            channel_count = device_params["channel_count"][name]
+            channel_format = device_params["channel_format"][name]
+            self._chunks[name] = np.zeros((channel_count,
+                                           device_params["chunk_size"][name]),
+                                          dtype=channel_format)
+            self._sample_idxs[name] = np.zeros(channel_count)
 
-        self._output_queue = output_queue
-
-        try:
-            self.scaling_output = kwargs["scaling_output"]
-        except KeyError:
-            self.scaling_output = True
+        self._callback = callback
+        self._subscriptions = subscriptions
 
     def process_packet(self, packet, handle):
         """BLE2LSL passes incoming BLE packets to this method for parsing."""
         raise NotImplementedError()
-
-    @property
-    def output(self):
-        """BLE2LSL expects data to be returned to the queue in this format."""
-        return (np.copy(self._sample_idxs), np.copy(self._data))
