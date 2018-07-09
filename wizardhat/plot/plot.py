@@ -101,7 +101,7 @@ class Lines():
         for i, ch in enumerate(self.data.ch_names):
             p = figure(plot_height=100,
                        tools="xpan,xwheel_zoom,xbox_zoom,reset",
-                       x_axis_type='datetime', y_axis_location="right",y_range=(-10,10))
+                       x_axis_type='datetime', y_axis_location="right")#,y_range=(-10,10))
             p.x_range.follow = "end"  # always follows new data in source
             p.x_range.follow_interval = 5  # in s
             p.x_range.range_padding = 0  # we can play with this stuff
@@ -123,7 +123,7 @@ class Lines():
 
     def _get_new_samples(self):
         #TODO Time delay of 1 second is necessary because there seems to be plotting issue related to server booting
-        #time delay allows the server to boot before samples get sent to it. 
+        #time delay allows the server to boot before samples get sent to it.
         time.sleep(1)
         while True:
             self.data.updated.wait()

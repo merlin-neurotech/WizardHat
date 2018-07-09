@@ -99,8 +99,8 @@ PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * 12,
 """Byte formats of the incoming packets."""
 
 CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
-                              lambda data: 0.0000610352 * data.reshape((3, 3)),
-                              lambda data: 0.0074768 * data.reshape((3, 3)),
+                              lambda data: 0.0000610352 * data.reshape((3, 3)).T,
+                              lambda data: 0.0074768 * data.reshape((3, 3)).T,
                               lambda data: np.array([data[0] / 512,
                                                      2.2 * data[1],
                                                      data[2], data[3]]).reshape((4, 1)),
