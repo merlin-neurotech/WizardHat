@@ -45,8 +45,7 @@ class BaseStreamer:
         outlet (pylsl.StreamOutlet): LSL outlet to which data is pushed.
     """
 
-    def __init__(self, device, subscriptions=('channels',),
-                 time_func=time.time):
+    def __init__(self, device, subscriptions=None, time_func=time.time):
         """Construct a `BaseStreamer` object.
 
         Args:
@@ -56,6 +55,8 @@ class BaseStreamer:
                 Some subset of `SUBSCRIPTION_NAMES`.
         """
         self._device = device
+        if subscriptions is None:
+            subscriptions = device.STREAMS
         self._subscriptions = subscriptions
         self._time_func = time_func
         self._stream_params = self._device.PARAMS['streams']

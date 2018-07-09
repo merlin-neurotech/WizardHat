@@ -25,8 +25,8 @@ import bitstring
 import numpy as np
 from pygatt import BLEAddressType
 
-STREAMS = ['channels', 'accelerometer', 'gyroscope', 'telemetry', 'status']
-"""Data recorded by the Muse 2016 headset, and available for subscription
+STREAMS = ['eeg', 'accelerometer', 'gyroscope', 'telemetry', 'status']
+"""Data provided by the Muse 2016 headset, and available for subscription
 over BLE."""
 
 # for constructing dicts with STREAMS as keys
@@ -43,8 +43,10 @@ PARAMS = dict(
                                      'float32', 'string']),
         numpy_dtype=streams_dict(['float32', 'float32', 'float32', 'float32',
                                   'object']),
-        units=streams_dict([('microvolts',) * 5, ('milli-g',) * 3,
-                            ('deg/s',) * 3, ('%', '?/mV', '?/mV', 'C'),
+        units=streams_dict([('uV',) * 5,
+                            ('milli-g',) * 3,
+                            ('deg/s',) * 3,
+                            ('%', '?/mV', '?/mV', 'C'),
                             ('',)]),
         ch_names=streams_dict([('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
                                ('x', 'y', 'z'),
@@ -60,11 +62,11 @@ PARAMS = dict(
         interval_max=76,  # pygatt default
 
         # characteristic UUIDs
-        channels=['273e0003-4c4d-454d-96be-f03bac821358',
-                  '273e0004-4c4d-454d-96be-f03bac821358',
-                  '273e0005-4c4d-454d-96be-f03bac821358',
-                  '273e0006-4c4d-454d-96be-f03bac821358',
-                  '273e0007-4c4d-454d-96be-f03bac821358'],
+        eeg=['273e0003-4c4d-454d-96be-f03bac821358',
+             '273e0004-4c4d-454d-96be-f03bac821358',
+             '273e0005-4c4d-454d-96be-f03bac821358',
+             '273e0006-4c4d-454d-96be-f03bac821358',
+             '273e0007-4c4d-454d-96be-f03bac821358'],
         # reference='273e0008-4c4d-454d-96be-f03bac821358',
         accelerometer='273e000a-4c4d-454d-96be-f03bac821358',
         gyroscope='273e0009-4c4d-454d-96be-f03bac821358',
@@ -84,8 +86,8 @@ PARAMS = dict(
 """Muse headset parameters, including BLE characteristics."""
 
 HANDLE_NAMES = {14: "status", 26: "telemetry", 23: "accelerometer",
-                20: "gyroscope", 32: "channels", 35: "channels",
-                38: "channels", 41: "channels", 44: "channels"}
+                20: "gyroscope", 32: "eeg", 35: "eeg", 38: "eeg", 41: "eeg",
+                44: "eeg"}
 """Stream name associated with each packet handle."""
 
 PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * PARAMS["chunk_size"],
@@ -104,8 +106,8 @@ CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
                               lambda data: None])
 """Functions to render unpacked data into the appropriate shape and units."""
 
-CH_HANDLE_IDXS = {32: 0, 35: 1, 38: 2, 41: 3, 44: 4}
-CH_HANDLE_RECEIVE_ORDER = [44, 41, 38, 32, 35]
+EEG_HANDLE_CH_IDXS = {32: 0, 35: 1, 38: 2, 41: 3, 44: 4}
+EEG_HANDLE_RECEIVE_ORDER = [44, 41, 38, 32, 35]
 """Channel indices and receipt order of EEG packets."""
 
 
@@ -121,16 +123,20 @@ class PacketHandler(BasePacketHandler):
         """Unpack, convert, and return packet contents."""
         name = HANDLE_NAMES[handle]
         unpacked = _unpack(packet, PACKET_FORMATS[name])
-        if name == 'status':
+
+        if name not in self._subscriptions:
+            return
+
+        if name == "status":
             self._process_status(unpacked)
         else:
             data = np.array(unpacked[1:], dtype=PARAMS["numpy_dtypes"][name])
 
-        if name == 'channels':
-            idx = CH_HANDLE_IDXS[handle]
+        if name == "eeg":
+            idx = EEG_HANDLE_CH_IDXS[handle]
             self._sample_idxs[name][idx] = unpacked[0]
             self._chunks[name][idx] = CONVERT_FUNCS[name](data)
-            if handle == CH_HANDLE_RECEIVE_ORDER[-1]:
+            if handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
                 self._callback(name, self._sample_idxs[name],
                                self._chunks[name])
         else:

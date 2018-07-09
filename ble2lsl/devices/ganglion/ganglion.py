@@ -15,7 +15,7 @@ PARAMS = dict(
     chunk_size=1,
     ble=dict(
         address_type=BLEAddressType.random,
-        service='fe84',
+        # service='fe84',
         interval_min=6,  # OpenBCI suggest 9
         interval_max=11,  # suggest 10
         receive=['2d30c082f39f4ce6923f3484ea480596'],
@@ -26,7 +26,7 @@ PARAMS = dict(
         # accelerometer_off=b'N',
         # impedance_on=b'z',
         # impedance_off=b'Z',
-        disconnect="2d30c084f39f4ce6923f3484ea480596",
+        # disconnect="2d30c084f39f4ce6923f3484ea480596",
     ),
 )
 """General OpenBCI Ganglion parameters, including BLE characteristics."""
