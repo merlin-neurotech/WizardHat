@@ -29,6 +29,8 @@ import pygatt
 from pygatt.backends.bgapi.exceptions import ExpectedResponseTimeout
 import pylsl as lsl
 
+INFO_ARGS = ['type', 'channel_count', 'nominal_srate', 'channel_format']
+
 
 class BaseStreamer:
     """Base class for streaming data through an LSL outlet.
@@ -43,7 +45,7 @@ class BaseStreamer:
         outlet (pylsl.StreamOutlet): LSL outlet to which data is pushed.
     """
 
-    def __init__(self, device, subscriptions=('channels'),
+    def __init__(self, device, subscriptions=('channels',),
                  time_func=time.time):
         """Construct a `BaseStreamer` object.
 
@@ -56,6 +58,7 @@ class BaseStreamer:
         self._device = device
         self._subscriptions = subscriptions
         self._time_func = time_func
+        self._stream_params = self._device.PARAMS['streams']
 
         self._init_buffer()
 
@@ -69,36 +72,34 @@ class BaseStreamer:
 
     def _init_lsl_outlets(self):
         """Call in subclass after acquiring address."""
-        source_id = "{}-{}".format(self._device.PARAMS['name'], self.address)
+        source_id = "{}-{}".format(self._device.PARAMS['name'], self._address)
         self._info = {}
         self._outlets = {}
         for name in self._subscriptions:
-            info_args = ['type', 'channel_count', 'nominal_srate',
-                         'channel_format']
-            info = {arg: self._device.PARAMS[arg][name] for arg in info_args}
+            info = {arg: self._stream_params[arg][name] for arg in INFO_ARGS}
             name = '{}-{}'.format(self._device.PARAMS['name'], name)
             self._info[name] = lsl.StreamInfo(name, **info,
                                               source_id=source_id)
             self._add_device_info(name)
-            chunk_size = self._device.PARAMS["chunk_sizes"][name]
+            chunk_size = self._stream_params["chunk_sizes"][name]
             self._outlets[name] = lsl.StreamOutlet(self._info[name],
                                                    chunk_size=chunk_size,
                                                    max_buffered=360)
 
     def _init_buffer(self):
-        channel_counts = self._device.PARAMS["channel_count"]
-        chunk_sizes = self._device.PARAMS["chunk_size"]
-        channel_formats = self._device.PARAMS["channel_format"]
+        channel_counts = self._stream_params["channel_count"]
+        chunk_sizes = self._stream_params["chunk_size"]
+        dtypes = self._stream_params["numpy_dtypes"]
         self._chunk_timestamps = {name: np.zeros(channel_counts[name],
                                                  dtype=np.float32)
                                   for name in self._subscriptions}
         self._current_chunks = {name: np.zeros((channel_counts[name],
                                                 chunk_sizes[name]),
-                                               dtype=channel_formats[name])
+                                               dtype=dtypes[name])
                                 for name in self._subscriptions}
 
     def _push_chunk(self, name):
-        for sample in range(self._device.PARAMS["chunk_size"][name]):
+        for sample in range(self._stream_params["chunk_size"][name]):
             self.outlet.push_sample(self._current_chunks[name][:, sample],
                                     self._chunk_timestamps[name][sample])
 
@@ -113,9 +114,9 @@ class BaseStreamer:
 
         channels = desc.append_child("channels")
         try:
-            for c, ch_name in enumerate(self._device.PARAMS["ch_names"][name]):
-                unit = self._device.PARAMS["units"][name][c]
-                type_ = self._device.PARAMS["type"][name]
+            for c, ch_name in enumerate(self._stream_params["ch_names"][name]):
+                unit = self._stream_params["units"][name][c]
+                type_ = self._stream_params["type"][name]
                 channels.append_child("channel") \
                     .append_child_value("label", ch_name) \
                     .append_child_value("unit", unit) \
@@ -162,7 +163,8 @@ class Streamer(BaseStreamer):
         BaseStreamer.__init__(self, device=device, **kwargs)
         self._packet_handler = device.PacketHandler(self._transmit_callback,
                                                     subscriptions)
-        self.address = address
+        self._ble_params = self._device.PARAMS["ble"]
+        self._address = address
 
         # initialize gatt adapter
         if backend == 'bgapi':
@@ -176,7 +178,6 @@ class Streamer(BaseStreamer):
         self._backend = backend
         self._scan_timeout = scan_timeout
 
-        self._ble_params = self._device.PARAMS["ble"]
         self.initialize_timestamping()
         # self._update_thread = threading.Thread(target=self._transmit_samples)
 
@@ -231,18 +232,18 @@ class Streamer(BaseStreamer):
             except ExpectedResponseTimeout:
                 continue
 
-        if self.address is None:
+        if self._address is None:
             # get the device address if none was provided
-            self.address = self._resolve_address(self._lsl_info["name"])
+            self._address = self._resolve_address(self._lsl_info["name"])
             try:
-                self._ble_device = self._adapter.connect(self.address,
+                self._ble_device = self._adapter.connect(self._address,
                     address_type=self._ble_params['address_type'],
                     interval_min=self._ble_params['interval_min'],
                     interval_max=self._ble_params['interval_max'])
 
             except pygatt.exceptions.NotConnectedError:
                 e_msg = "Unable to connect to device at address {}" \
-                    .format(self.address)
+                    .format(self._address)
                 raise(IOError(e_msg))
 
         self._init_lsl_outlets()
@@ -300,6 +301,10 @@ class Streamer(BaseStreamer):
         """The `pygatt` backend used by the instance."""
         return self._backend
 
+    @property
+    def address(self):
+        """The MAC address of the device."""
+        return self._address
 
 class Dummy(BaseStreamer):
     """Streams data over an LSL outlet from a local source.
@@ -326,7 +331,7 @@ class Dummy(BaseStreamer):
 
         BaseStreamer.__init__(self, device=device, **kwargs)
 
-        self.address = None
+        self._address = None
         self._init_lsl_outlet()
         self._thread = threading.Thread(target=self._stream)
 
