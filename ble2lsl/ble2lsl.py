@@ -20,6 +20,7 @@ TODO:
    https://github.com/peplin/pygatt
 """
 
+from struct import error as StructError
 import threading
 import time
 from warnings import warn
@@ -61,7 +62,10 @@ class BaseStreamer:
         self._time_func = time_func
         self._stream_params = self._device.PARAMS['streams']
 
-        self._init_buffer()
+        self._chunk_timestamps = empty_chunk_timestamps(self._stream_params,
+                                                        self._subscriptions)
+        self._current_chunks = empty_chunks(self._stream_params,
+                                            self._subscriptions)
 
     def start(self):
         """Begin streaming through the LSL outlet."""
@@ -78,31 +82,20 @@ class BaseStreamer:
         self._outlets = {}
         for name in self._subscriptions:
             info = {arg: self._stream_params[arg][name] for arg in INFO_ARGS}
-            name = '{}-{}'.format(self._device.PARAMS['name'], name)
-            self._info[name] = lsl.StreamInfo(name, **info,
+            outlet_name = '{}-{}'.format(self._device.PARAMS['name'], name)
+            self._info[name] = lsl.StreamInfo(outlet_name, **info,
                                               source_id=source_id)
             self._add_device_info(name)
-            chunk_size = self._stream_params["chunk_sizes"][name]
+            chunk_size = self._stream_params["chunk_size"][name]
             self._outlets[name] = lsl.StreamOutlet(self._info[name],
                                                    chunk_size=chunk_size,
                                                    max_buffered=360)
 
-    def _init_buffer(self):
-        channel_counts = self._stream_params["channel_count"]
-        chunk_sizes = self._stream_params["chunk_size"]
-        dtypes = self._stream_params["numpy_dtypes"]
-        self._chunk_timestamps = {name: np.zeros(channel_counts[name],
-                                                 dtype=np.float32)
-                                  for name in self._subscriptions}
-        self._current_chunks = {name: np.zeros((channel_counts[name],
-                                                chunk_sizes[name]),
-                                               dtype=dtypes[name])
-                                for name in self._subscriptions}
-
     def _push_chunk(self, name):
+        outlet = self._outlets[name]
         for sample in range(self._stream_params["chunk_size"][name]):
-            self.outlet.push_sample(self._current_chunks[name][:, sample],
-                                    self._chunk_timestamps[name][sample])
+            outlet.push_sample(self._current_chunks[name][:, sample],
+                               self._chunk_timestamps[name][sample])
 
     def _add_device_info(self, name):
         """Adds device-specific parameters to `info`."""
@@ -135,9 +128,9 @@ class Streamer(BaseStreamer):
             Provided by `time_func`.
     """
 
-    def __init__(self, device, subscriptions, address=None, backend='bgapi',
-                 interface=None, autostart=True, scan_timeout=10.5,
-                 internal_timestamps=False, **kwargs):
+    def __init__(self, device, address=None, backend='bgapi', interface=None,
+                 autostart=True, scan_timeout=10.5, internal_timestamps=False,
+                 **kwargs):
         """Construct a `Streamer` instance for a given device.
 
         Args:
@@ -163,9 +156,15 @@ class Streamer(BaseStreamer):
         """
         BaseStreamer.__init__(self, device=device, **kwargs)
         self._packet_handler = device.PacketHandler(self._transmit_callback,
-                                                    subscriptions)
+                                                    self._subscriptions)
         self._ble_params = self._device.PARAMS["ble"]
         self._address = address
+
+        # use internal timestamps if requested, or if stream is variable rate
+        nominal_srates = self._stream_params["nominal_srate"]
+        self._internal_timestamps = {name: (internal_timestamps
+                                            if nominal_srates[name] else True)
+                                     for name in device.STREAMS}
 
         # initialize gatt adapter
         if backend == 'bgapi':
@@ -230,34 +229,34 @@ class Streamer(BaseStreamer):
             try:
                 self._adapter.start()
                 adapter_started = True
-            except ExpectedResponseTimeout:
+            except (ExpectedResponseTimeout, StructError):
                 continue
 
         if self._address is None:
             # get the device address if none was provided
-            self._address = self._resolve_address(self._lsl_info["name"])
-            try:
-                self._ble_device = self._adapter.connect(self._address,
-                    address_type=self._ble_params['address_type'],
-                    interval_min=self._ble_params['interval_min'],
-                    interval_max=self._ble_params['interval_max'])
+            self._address = self._resolve_address(self._device.PARAMS["name"])
+        try:
+            self._ble_device = self._adapter.connect(self._address,
+                address_type=self._ble_params['address_type'],
+                interval_min=self._ble_params['interval_min'],
+                interval_max=self._ble_params['interval_max'])
 
-            except pygatt.exceptions.NotConnectedError:
-                e_msg = "Unable to connect to device at address {}" \
-                    .format(self._address)
-                raise(IOError(e_msg))
+        except pygatt.exceptions.NotConnectedError:
+            e_msg = "Unable to connect to device at address {}" \
+                .format(self._address)
+            raise(IOError(e_msg))
 
         self._init_lsl_outlets()
 
         # subscribe to receive characteristic notifications
+        process_packet = self._packet_handler.process_packet
         for name in self._subscriptions:
             try:
                 uuids = [self._ble_params[name] + '']
             except TypeError:
                 uuids = self._ble_params[name]
             for uuid in uuids:
-                self._ble_device.subscribe(uuid,
-                                           callback=self._packet_callback)
+                self._ble_device.subscribe(uuid, callback=process_packet)
             # subscribe to recieve simblee command from ganglion doc
 
     def _resolve_address(self, name):
@@ -266,10 +265,6 @@ class Streamer(BaseStreamer):
             if name in device['name']:
                 return device['address']
         raise(ValueError("No devices found with name `{}`".format(name)))
-
-    def _packet_callback(self, handle, data):
-        """Callback function used by `pygatt` to receive BLE data."""
-        self._packet_handler.process_packet(handle, data)
 
     def _transmit_callback(self, name, sample_idxs, chunk):
         """TODO: missing chunk vs. missing sample"""
@@ -280,17 +275,22 @@ class Streamer(BaseStreamer):
         if self._last_idx[name] == 0:
             self._last_idx[name] = chunk_idx - 1
         if not chunk_idx == self._last_idx[name] + 1:
-            print("Missing sample {} : {}".format(chunk_idx,
-                                                  self._last_idx[name]))
-        self._last_idx = chunk_idx
-        sample_idxs = np.arange(self._chunk_size)
-        if not self._internal_timestamping:
+            print("Missing {} sample {} : {}".format(name, chunk_idx,
+                                                     self._last_idx[name]))
+        self._last_idx[name] = chunk_idx
+        sample_idxs = np.arange(self._stream_params["chunk_size"][name],
+                                dtype=np.float32)
+        if self._internal_timestamps[name]:
             sample_idxs += self._sample_idx[name]
-        self._sample_idx[name] += self._device.PARAMS["chunk_size"][name]
+        self._sample_idx[name] += self._stream_params["chunk_size"][name]
 
         # generate timestamps based on start time and nominal sample rate
-        timestamps = sample_idxs / self._device.PARAMS["nominal_srate"][name]
-        if self._internal_timestamping:
+        nominal_srate = self._stream_params["nominal_srate"][name]
+        if nominal_srate:
+            timestamps = sample_idxs / nominal_srate
+        else:
+            timestamps = sample_idxs * 0.0
+        if self._internal_timestamps[name]:
             timestamps += self._time_func()
         else:
             timestamps += self.start_time
@@ -392,3 +392,20 @@ class Dummy(BaseStreamer):
         # TODO: more realistic timestamps
         timestamp = self._time_func()
         self._timestamps = np.array([timestamp]*self._chunk_size)
+
+
+def empty_chunk_timestamps(stream_params, subscriptions, dtype=np.float32):
+    """Initialize an empty timestamp array for each subscription."""
+    chunk_timestamps = {name: np.zeros(stream_params["channel_count"][name],
+                                       dtype=dtype)
+                        for name in subscriptions}
+    return chunk_timestamps
+
+
+def empty_chunks(stream_params, subscriptions):
+    """Initialize an empty chunk array for each subscription."""
+    chunks = {name: np.zeros((stream_params["channel_count"][name],
+                              stream_params["chunk_size"][name]),
+                             dtype=stream_params["numpy_dtype"][name])
+              for name in subscriptions}
+    return chunks

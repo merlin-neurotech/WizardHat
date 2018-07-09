@@ -77,29 +77,27 @@ attribute of the respective device file.
    https://github.com/sccn/xdf/wiki/Specifications
 """
 
+from ble2lsl import empty_chunks, empty_chunk_timestamps
+
 import numpy as np
 
 
 class BasePacketHandler:
     """Abstract parent for device-specific packet manager classes."""
 
-    def __init__(self, device_params, callback, subscriptions,
-                 **kwargs):
+    def __init__(self, stream_params, callback, subscriptions, **kwargs):
         """Construct a `PacketHandler` instance.
 
         Args:
-            device_params (dict): Device-specific parameters.
-            output_queue (queue.Queue): Queue for putting processed data.
+            stream_params (dict): Stream parameters.
+                Pass `PARAMS["streams"]` from the device file.
+            callback (function): `Streamer` method for handling returned data.
+            subscriptions (Iterable[str]): Names of subscribed streams.
         """
-        self._chunks = {}
-        self._sample_idxs = {}
-        for name in subscriptions:
-            channel_count = device_params["channel_count"][name]
-            channel_format = device_params["channel_format"][name]
-            self._chunks[name] = np.zeros((channel_count,
-                                           device_params["chunk_size"][name]),
-                                          dtype=channel_format)
-            self._sample_idxs[name] = np.zeros(channel_count)
+        self._chunks = empty_chunks(stream_params, subscriptions)
+        self._sample_idxs = empty_chunk_timestamps(stream_params,
+                                                   subscriptions,
+                                                   dtype=int)
 
         self._callback = callback
         self._subscriptions = subscriptions

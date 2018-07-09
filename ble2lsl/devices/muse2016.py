@@ -11,6 +11,7 @@ TODO:
     * DRL/REF characteristic
     * verify sample ID is chunk ID
     * don't use lambdas for CONVERT_FUNCS?
+    * save Muse address to minimize connect time?
 
 .. _Available Data - Muse Direct:
    http://developer.choosemuse.com/tools/windows-tools/available-data-muse-direct
@@ -38,7 +39,7 @@ PARAMS = dict(
     streams=dict(
         type=streams_dict(['EEG', 'ACC', 'GYR', 'TLM', 'STAT']),  # XDF
         channel_count=streams_dict([5, 3, 3, 4, 1]),
-        nominal_srate=streams_dict([256, 52, 52, 0.1, None]),
+        nominal_srate=streams_dict([256, 52, 52, 0.1, 0.0]),
         channel_format=streams_dict(['float32', 'float32', 'float32',
                                      'float32', 'string']),
         numpy_dtype=streams_dict(['float32', 'float32', 'float32', 'float32',
@@ -53,7 +54,7 @@ PARAMS = dict(
                                ('x', 'y', 'z'),
                                ('battery', 'fuel_gauge', 'adc_volt',
                                 'temperature'),
-                               ('message')]),
+                               ('message',)]),
         chunk_size=streams_dict([12, 3, 3, 1, 1]),
     ),
     ble=dict(
@@ -90,7 +91,7 @@ HANDLE_NAMES = {14: "status", 26: "telemetry", 23: "accelerometer",
                 44: "eeg"}
 """Stream name associated with each packet handle."""
 
-PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * PARAMS["chunk_size"],
+PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * 12,
                                'uint:16' + ',int:16' * 9,
                                'uint:16' + ',int:16' * 9,
                                'uint:16' + ',uint:16' * 4,
@@ -102,7 +103,7 @@ CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
                               lambda data: 0.0074768 * data.reshape((3, 3)),
                               lambda data: np.array([data[0] / 512,
                                                      2.2 * data[1],
-                                                     data[2], data[3]]),
+                                                     data[2], data[3]]).reshape((4, 1)),
                               lambda data: None])
 """Functions to render unpacked data into the appropriate shape and units."""
 
@@ -115,7 +116,7 @@ class PacketHandler(BasePacketHandler):
     """Process packets from the Muse 2016 headset into chunks."""
 
     def __init__(self, callback, subscriptions, **kwargs):
-        super().__init__(device_params=PARAMS, callback=callback,
+        super().__init__(stream_params=PARAMS["streams"], callback=callback,
                          subscriptions=subscriptions, **kwargs)
         self._message = ""
 
@@ -129,8 +130,9 @@ class PacketHandler(BasePacketHandler):
 
         if name == "status":
             self._process_status(unpacked)
+            return
         else:
-            data = np.array(unpacked[1:], dtype=PARAMS["numpy_dtypes"][name])
+            data = np.array(unpacked[1:], dtype=PARAMS["streams"]["numpy_dtype"][name])
 
         if name == "eeg":
             idx = EEG_HANDLE_CH_IDXS[handle]
@@ -140,7 +142,7 @@ class PacketHandler(BasePacketHandler):
                 self._callback(name, self._sample_idxs[name],
                                self._chunks[name])
         else:
-            self._sample_idxs[name] = unpacked[0]
+            self._sample_idxs[name][:] = unpacked[0]
             self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
             self._callback(name, self._sample_idxs[name],
                            self._chunks[name])
@@ -152,7 +154,8 @@ class PacketHandler(BasePacketHandler):
         if status_message_partial[-1] == '}':
             self._message = self._message.replace('\n', '')
             # parse and enqueue dict
-            self._callback("status", -1, ast.literal_eval(self._message))
+            self._callback("status", [-1], self._message)
+            # ast.literal_eval(self._message))
             self._message = ""
 
 
