@@ -1,44 +1,50 @@
 """Interfacing parameters for the OpenBCI Ganglion Board."""
 
 from ble2lsl.devices.device import BasePacketHandler
-from ble2lsl.utils import bad_data_size
+from ble2lsl.utils import bad_data_size, dict_partial_from_keys
 
 import struct
 
 import numpy as np
 from pygatt import BLEAddressType
 
+STREAMS = ['eeg', 'accelerometer', 'status']
+"""Data provided by the OpenBCI Ganglion, and available for subscription."""
+
+# for constructing dicts with STREAMS as keys
+streams_dict = dict_partial_from_keys(STREAMS)
+
 PARAMS = dict(
     manufacturer='OpenBCI',
-    units='microvolts',
-    ch_names=('A', 'B', 'C', 'D'),  # placement-dependent...
-    chunk_size=1,
+    name='Ganglion',
+    streams=dict(
+        type=streams_dict(['EEG', 'ACC', 'STAT']),
+        channel_count=streams_dict([4, 3, 1]),
+        nominal_srate=streams_dict([200, 200, 0.0]),
+        channel_format=streams_dict(['float32', 'float32', 'string']),
+        numpy_dtype=streams_dict(['float32', 'float32', 'object']),
+        units=streams_dict([('uV',) * 4, ('milli-g',) * 3, ('message',)]),
+        ch_names=streams_dict([('A', 'B', 'C', 'D'), ('x', 'y', 'z'), ('',)]),
+        chunk_size=streams_dict([1, 1, 1]),
+    ),
     ble=dict(
         address_type=BLEAddressType.random,
         # service='fe84',
         interval_min=6,  # OpenBCI suggest 9
         interval_max=11,  # suggest 10
-        receive=['2d30c082f39f4ce6923f3484ea480596'],
+        eeg='2d30c082f39f4ce6923f3484ea480596',
+        accelerometer='2d30c082f39f4ce6923f3484ea480596',  # same as eeg
         send="2d30c083f39f4ce6923f3484ea480596",
         stream_on=b'b',
         stream_off=b's',
-        # accelerometer_on=b'n',
-        # accelerometer_off=b'N',
+        accelerometer_on=b'n',
+        accelerometer_off=b'N',
         # impedance_on=b'z',
         # impedance_off=b'Z',
         # disconnect="2d30c084f39f4ce6923f3484ea480596",
     ),
 )
 """General OpenBCI Ganglion parameters, including BLE characteristics."""
-
-LSL_INFO = dict(
-    name='Ganglion',
-    type='EEG',
-    channel_count=4,
-    nominal_srate=200,
-    channel_format='float32'
-)
-"""OpenBCI Ganglion parameters for constructing `pylsl.StreamInfo`."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
 SCALE_FACTOR_EEG = 1200 / (8388607.0 * 1.5 * 51.0)  # microvolts per count
@@ -48,17 +54,16 @@ SCALE_FACTOR_ACCEL = 0.000016  # G per count
 class PacketHandler(BasePacketHandler):
     """Process packets from the OpenBCI Ganglion into chunks."""
 
-    def __init__(self, output_queue, **kwargs):
-        super().__init__(device_params=PARAMS,
-                         output_queue=output_queue,
-                         **kwargs)
+    def __init__(self, callback, subscriptions, **kwargs):
+        super().__init__(stream_params=PARAMS["streams"], callback=callback,
+                         subscriptions=subscriptions, **kwargs)
         # holds samples until OpenBCIBoard claims them
         # detect gaps between packets
         self._last_id = -1
-        # 18bit data got here and then accelerometer with it
-        self.last_accelerometer = [0, 0, 0]
-        # when the board is manually set in the right mode, impedance will be measured. 4 channels + ref
-        self.last_impedance = [0, 0, 0, 0, 0]
+
+        if 'accelerometer' in subscriptions:
+            # send accelerometer_on command
+            pass
 
         # byte ID ranges for parsing function selection
         self._byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
@@ -68,7 +73,7 @@ class PacketHandler(BasePacketHandler):
                                 (201, 205): self.parse_impedance,
                                 (208, -1): self.unknown_packet_warning}
 
-    def process_packet(self, packet, handle):
+    def process_packet(self, handle, packet):
         """Process incoming data packet.
 
         Calls the corresponding parsing function depending on packet format.
@@ -87,7 +92,9 @@ class PacketHandler(BasePacketHandler):
         self.update_packets_count(sample_id)
         self._sample_idxs[0] = self._count_id
         self._data[:] = chan_data
-        self._output_queue.put(self.output)
+
+        # separate accelerometer and eeg data if accelerometer is subscribed
+        self._callback(name, self._sample_idxs, self.output)
 
     def update_packets_count(self, sample_id):
         """Update last packet ID and dropped packets"""
