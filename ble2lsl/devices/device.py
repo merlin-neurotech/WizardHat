@@ -79,27 +79,36 @@ attribute of the respective device file.
 
 from ble2lsl import empty_chunks, empty_chunk_timestamps
 
+import numpy as np
+
 
 class BasePacketHandler:
     """Abstract parent for device-specific packet manager classes."""
 
-    def __init__(self, stream_params, transmit_queue, subscriptions, **kwargs):
+    def __init__(self, stream_params, streamer, **kwargs):
         """Construct a `PacketHandler` instance.
 
         Args:
             stream_params (dict): Stream parameters.
                 Pass `PARAMS["streams"]` from the device file.
-            transmit_queue (queue.Queue): Queue for data returned to `ble2lsl`.
-            subscriptions (Iterable[str]): Names of subscribed streams.
+            streamer (ble2lsl.Streamer): The master `Streamer` instance.
         """
+        self._streamer = streamer
+        self._transmit_queue = streamer._transmit_queue
+
+        subscriptions = self._streamer.subscriptions
         self._chunks = empty_chunks(stream_params, subscriptions)
         self._sample_idxs = empty_chunk_timestamps(stream_params,
                                                    subscriptions,
                                                    dtype=int)
 
-        self._transmit_queue = transmit_queue
-        self._subscriptions = subscriptions
-
     def process_packet(self, handle, packet):
         """BLE2LSL passes incoming BLE packets to this method for parsing."""
         raise NotImplementedError()
+
+    def _enqueue_chunk(self, name):
+        """Ensure copies are returned."""
+        self._transmit_queue.put((name,
+                                  np.copy(self._sample_idxs[name]),
+                                  np.copy(self._chunks[name])
+                                  ))

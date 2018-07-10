@@ -1,5 +1,6 @@
 """Utilities for use within BLE2LSL."""
 
+from warnings import warn
 
 def invert_map(dict_):
     """Invert the keys and values in a dict."""
@@ -10,8 +11,8 @@ def invert_map(dict_):
 def bad_data_size(data, size, data_type="packet"):
     """Return `True` if length of `data` is not `size`."""
     if len(data) != size:
-        print('Wrong size for {}, {} instead of {} bytes'
-              .format(data_type, len(data), size))
+        warn('Wrong size for {}, {} instead of {} bytes'
+             .format(data_type, len(data), size))
         return True
     return False
 

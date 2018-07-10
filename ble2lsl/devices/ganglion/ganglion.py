@@ -4,12 +4,16 @@ from ble2lsl.devices.device import BasePacketHandler
 from ble2lsl.utils import bad_data_size, dict_partial_from_keys
 
 import struct
+from warnings import warn
 
 import numpy as np
 from pygatt import BLEAddressType
 
-STREAMS = ['eeg', 'accelerometer', 'status']
+STREAMS = ['eeg', 'accelerometer', 'messages']
 """Data provided by the OpenBCI Ganglion, and available for subscription."""
+
+DEFAULT_SUBSCRIPTIONS = ['eeg', 'messages']
+"""Streams to which to subscribe by default."""
 
 # for constructing dicts with STREAMS as keys
 streams_dict = dict_partial_from_keys(STREAMS)
@@ -20,7 +24,7 @@ PARAMS = dict(
     streams=dict(
         type=streams_dict(['EEG', 'ACC', 'STAT']),
         channel_count=streams_dict([4, 3, 1]),
-        nominal_srate=streams_dict([200, 200, 0.0]),
+        nominal_srate=streams_dict([200, 10, 0.0]),
         channel_format=streams_dict(['float32', 'float32', 'string']),
         numpy_dtype=streams_dict(['float32', 'float32', 'object']),
         units=streams_dict([('uV',) * 4, ('milli-g',) * 3, ('message',)]),
@@ -32,8 +36,9 @@ PARAMS = dict(
         # service='fe84',
         interval_min=6,  # OpenBCI suggest 9
         interval_max=11,  # suggest 10
-        eeg='2d30c082f39f4ce6923f3484ea480596',
-        accelerometer='2d30c082f39f4ce6923f3484ea480596',  # same as eeg
+        eeg="2d30c082f39f4ce6923f3484ea480596",
+        accelerometer='',  # placeholder; already subscribed through eeg
+        messages='',  # placeholder; subscription not required
         send="2d30c083f39f4ce6923f3484ea480596",
         stream_on=b'b',
         stream_off=b's',
@@ -47,31 +52,36 @@ PARAMS = dict(
 """General OpenBCI Ganglion parameters, including BLE characteristics."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
-SCALE_FACTOR_EEG = 1200 / (8388607.0 * 1.5 * 51.0)  # microvolts per count
-SCALE_FACTOR_ACCEL = 0.000016  # G per count
+ID_TURNOVER = streams_dict([PARAMS["streams"]["nominal_srate"]["eeg"] + 1,
+                            PARAMS["streams"]["nominal_srate"]["accelerometer"]
+                            ])
+CONVERT_FUNCS = streams_dict([lambda x: x * 1200 / (8388607.0 * 1.5 * 51.0),  # uV/count
+                              lambda x: 0.000016 * x,
+                              lambda x: x,  # not used (messages)
+                              ])
 
 
 class PacketHandler(BasePacketHandler):
     """Process packets from the OpenBCI Ganglion into chunks."""
 
-    def __init__(self, callback, subscriptions, **kwargs):
-        super().__init__(stream_params=PARAMS["streams"], callback=callback,
-                         subscriptions=subscriptions, **kwargs)
-        # holds samples until OpenBCIBoard claims them
-        # detect gaps between packets
-        self._last_id = -1
+    def __init__(self, streamer, **kwargs):
+        super().__init__(PARAMS["streams"], streamer, **kwargs)
 
-        if 'accelerometer' in subscriptions:
-            # send accelerometer_on command
-            pass
+        self._chunks["messages"][0] = ""
+        self._sample_idxs["messages"][0] = -1
+        self._sample_ids = streams_dict([-1] * len(STREAMS))
+
+        if 'accelerometer' in self._streamer.subscriptions:
+            # queue accelerometer_on command
+            self._streamer.send_command(PARAMS["ble"]["accelerometer_on"])
 
         # byte ID ranges for parsing function selection
-        self._byte_id_ranges = {(101, 200): self.parse_compressed_19bit,
-                                (0, 0): self.parse_uncompressed,
-                                (206, 207): self.print_ascii,
-                                (1, 100): self.parse_compressed_18bit,
-                                (201, 205): self.parse_impedance,
-                                (208, -1): self.unknown_packet_warning}
+        self._byte_id_ranges = {(101, 200): self._parse_compressed_19bit,
+                                (0, 0): self._parse_uncompressed,
+                                (206, 207): self._parse_message,
+                                (1, 100): self._parse_compressed_18bit,
+                                (201, 205): self._parse_impedance,
+                                (208, -1): self._unknown_packet_warning}
 
     def process_packet(self, handle, packet):
         """Process incoming data packet.
@@ -84,67 +94,50 @@ class PacketHandler(BasePacketHandler):
                 self._byte_id_ranges[r](start_byte, packet[1:])
                 break
 
-    def push_sample(self, sample_id, chan_data, aux_data, imp_data):
-        """Add a sample to inner stack, setting ID and dealing with scaling if necessary. """
-        if self.scaling_output:
-            chan_data *= SCALE_FACTOR_EEG
-            # aux_data = np.array(aux_data) * SCALE_FACTOR_ACCEL_G_per_count
-        self.update_packets_count(sample_id)
-        self._sample_idxs[0] = self._count_id
-        self._data[:] = chan_data
-
-        # separate accelerometer and eeg data if accelerometer is subscribed
-        self._callback(name, self._sample_idxs, self.output)
-
-    def update_packets_count(self, sample_id):
+    def _update_counts_and_enqueue(self, name, sample_id):
         """Update last packet ID and dropped packets"""
-        if self._last_id == -1:
-            self._last_id = sample_id
-            self._count_id = 1
+        if self._sample_ids[name] == -1:
+            self._sample_ids[name] = sample_id
+            self._sample_idxs[name][0] = 1
             return
-        # ID loops every 101 packets (201 samples)
-        if sample_id > self._last_id:
-            self._count_id += sample_id - self._last_id
-        else:
-            self._count_id += sample_id - self._last_id + 201
-        self._last_id = sample_id
+        # sample IDs loops every 101 packets
+        self._sample_idxs[name][0] += sample_id - self._sample_ids[name]
+        if sample_id < self._sample_ids[name]:
+            self._sample_idxs[name][0] += ID_TURNOVER[name]
+        self._sample_ids[name] = sample_id
+        self._chunks[name] = CONVERT_FUNCS[name](self._chunks[name])
+        self._enqueue_chunk(name)
 
-    def unknown_packet_warning(self, start_byte, packet):
+    def _unknown_packet_warning(self, start_byte, packet):
         """Print if incoming byte ID is unknown."""
-        print("Warning: unknown type of packet: {}".format(start_byte))
+        warn("Unknown Ganglion packet byte ID: {}".format(start_byte))
 
-    def print_ascii(self, start_byte, packet):
-        """Print verbose ASCII data.
-
-        TODO:
-            * optional log file
-        """
-        print("%\t" + str(packet))
+    def _parse_message(self, start_byte, packet):
+        """Parse a partial ASCII message."""
+        self._chunks["messages"] += str(packet)
         if start_byte == 207:
-            print("$$$\n")
+            self._enqueue_chunk("messages")
+            self._chunks["messages"][0] = ""
 
-    def parse_uncompressed(self, packet_id, packet):
+    def _parse_uncompressed(self, packet_id, packet):
         """Parse a raw uncompressed packet."""
         if bad_data_size(packet, 19, "uncompressed data"):
             return
-        # 4 channels of 24bits, take values one by one
-        chan_data = [int_from_24bits(packet[i:i+3]) for i in range(0, 12, 3)]
-        chan_data = np.array([chan_data], dtype=np.float32).T
-        # save uncompressed raw channel for future use and append whole sample
-        self.push_sample(packet_id, chan_data, self.last_accelerometer,
-                         self.last_impedance)
+        # 4 channels of 24bits
+        self._chunks["eeg"][:] = [[int_from_24bits(packet[i : i + 3])]
+                                  for i in range(0, 12, 3)]
+        # = np.array([chan_data], dtype=np.float32).T
+        self._update_counts_and_enqueue("eeg", packet_id)
 
-    def update_data_with_deltas(self, packet_id, deltas):
+    def _update_data_with_deltas(self, packet_id, deltas):
         for delta_id in [0, 1]:
             # convert from packet to sample ID
             sample_id = (packet_id - 1) * 2 + delta_id + 1
             # 19bit packets hold deltas between two samples
-            # TODO: use more broadly numpy
-            chan_data = self._data - deltas[delta_id, :].reshape(4, 1)
-            self.push_sample(sample_id, chan_data, self.last_accelerometer,
-                             self.last_impedance)
+            self._chunks["eeg"] -= deltas[delta_id, :].reshape(4, 1)
+            self._update_counts_and_enqueue("eeg", sample_id)
 
-    def parse_compressed_19bit(self, packet_id, packet):
+    def _parse_compressed_19bit(self, packet_id, packet):
         """Parse a 19-bit compressed packet without accelerometer data."""
         if bad_data_size(packet, 19, "19-bit compressed data"):
             return
@@ -152,21 +145,26 @@ class PacketHandler(BasePacketHandler):
         packet_id -= 100
         # should get 2 by 4 arrays of uncompressed data
         deltas = decompress_deltas_19bit(packet)
-        self.update_data_with_deltas(packet_id, deltas)
+        self._update_data_with_deltas(packet_id, deltas)
 
-    def parse_compressed_18bit(self, packet_id, packet):
+    def _parse_compressed_18bit(self, packet_id, packet):
         """ Dealing with "18-bit compression without Accelerometer" """
         if bad_data_size(packet, 19, "18-bit compressed data"):
             return
 
         # set appropriate accelerometer byte
-        self.last_accelerometer[packet_id % 10 - 1] = int8_from_byte(packet[18])
+        id_ones = packet_id % 10 - 1
+        if id_ones in [0, 1, 2]:
+            self._chunks["accelerometer"][id_ones] = int8_from_byte(packet[18])
+            if id_ones == 2:
+                self._update_counts_and_enqueue("accelerometer",
+                                                packet_id // 10)
 
         # deltas: should get 2 by 4 arrays of uncompressed data
         deltas = decompress_deltas_18bit(packet[:-1])
-        self.update_data_with_deltas(packet_id, deltas)
+        self._update_data_with_deltas(packet_id, deltas)
 
-    def parse_impedance(self, packet_id, packet):
+    def _parse_impedance(self, packet_id, packet):
         """Parse impedance data.
 
         After turning on impedance checking, takes a few seconds to complete.

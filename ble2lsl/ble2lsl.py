@@ -58,7 +58,11 @@ class BaseStreamer:
         """
         self._device = device
         if subscriptions is None:
-            subscriptions = device.STREAMS
+            # look for default list; if unavailable, subscribe to all
+            try:
+                subscriptions = device.DEFAULT_SUBSCRIPTIONS
+            except AttributeError:
+                subscriptions = device.STREAMS
         self._subscriptions = subscriptions
         self._time_func = time_func
         self._stream_params = self._device.PARAMS['streams']
@@ -157,8 +161,6 @@ class Streamer(BaseStreamer):
         """
         BaseStreamer.__init__(self, device=device, **kwargs)
         self._transmit_queue = Queue()
-        self._packet_handler = device.PacketHandler(self._transmit_queue,
-                                                    self._subscriptions)
         self._ble_params = self._device.PARAMS["ble"]
         self._address = address
 
@@ -195,16 +197,22 @@ class Streamer(BaseStreamer):
         self.start_time = self._time_func()
 
     def start(self):
-        """Start streaming by writing to the relevant GATT characteristic."""
+        """Start streaming by writing to the send characteristic."""
         self._transmit_thread.start()
         self._ble_device.char_write(self._ble_params['send'],
                                     value=self._ble_params['stream_on'],
                                     wait_for_response=False)
 
     def stop(self):
-        """Stop streaming by writing to the relevant GATT characteristic."""
+        """Stop streaming by writing to the send characteristic."""
         self._ble_device.char_write(self._ble_params["send"],
                                     value=self._ble_params["stream_off"],
+                                    wait_for_response=False)
+
+    def send_command(self, value):
+        """Write some value to the send characteristic."""
+        self._ble_device.char_write(self._ble_params["send"],
+                                    value=value,
                                     wait_for_response=False)
 
     def disconnect(self):
@@ -249,7 +257,9 @@ class Streamer(BaseStreamer):
                 .format(self._address)
             raise(IOError(e_msg))
 
+        # initialize LSL outlets and packet handler
         self._init_lsl_outlets()
+        self._packet_handler = self._device.PacketHandler(self)
 
         # subscribe to receive characteristic notifications
         process_packet = self._packet_handler.process_packet
@@ -259,7 +269,8 @@ class Streamer(BaseStreamer):
             except TypeError:
                 uuids = self._ble_params[name]
             for uuid in uuids:
-                self._ble_device.subscribe(uuid, callback=process_packet)
+                if uuid:
+                    self._ble_device.subscribe(uuid, callback=process_packet)
             # subscribe to recieve simblee command from ganglion doc
 
     def _resolve_address(self, name):
@@ -273,9 +284,6 @@ class Streamer(BaseStreamer):
         """TODO: missing chunk vs. missing sample"""
         while True:
             name, sample_idxs, chunk = self._transmit_queue.get()
-            print("queue size: ", self._transmit_queue.qsize())
-            if sample_idxs is None:
-                pass
             self._current_chunks[name][:, :] = chunk
             chunk_idx = sample_idxs[0]
             if self._last_idx[name] == 0:
@@ -312,6 +320,11 @@ class Streamer(BaseStreamer):
     def address(self):
         """The MAC address of the device."""
         return self._address
+
+    @property
+    def subscriptions(self):
+        """The names of the subscribed streams."""
+        return self._subscriptions
 
 
 class Dummy(BaseStreamer):

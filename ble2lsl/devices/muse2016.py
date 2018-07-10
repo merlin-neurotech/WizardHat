@@ -28,6 +28,9 @@ STREAMS = ['eeg', 'accelerometer', 'gyroscope', 'telemetry', 'status']
 """Data provided by the Muse 2016 headset, and available for subscription
 over BLE."""
 
+DEFAULT_SUBSCRIPTIONS = STREAMS
+"""Streams to which to subscribe by default."""
+
 # for constructing dicts with STREAMS as keys
 streams_dict = dict_partial_from_keys(STREAMS)
 
@@ -45,7 +48,7 @@ PARAMS = dict(
         units=streams_dict([('uV',) * 5,
                             ('milli-g',) * 3,
                             ('deg/s',) * 3,
-                            ('%', '?/mV', '?/mV', 'C'),
+                            ('%', 'mV', 'mV', 'C'),
                             ('',)]),
         ch_names=streams_dict([('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
                                ('x', 'y', 'z'),
@@ -113,49 +116,46 @@ EEG_HANDLE_RECEIVE_ORDER = [44, 41, 38, 32, 35]
 class PacketHandler(BasePacketHandler):
     """Process packets from the Muse 2016 headset into chunks."""
 
-    def __init__(self, transmit_queue, subscriptions, **kwargs):
-        super().__init__(stream_params=PARAMS["streams"],
-                         transmit_queue=transmit_queue,
-                         subscriptions=subscriptions, **kwargs)
-        self._message = ""
+    def __init__(self, streamer, **kwargs):
+        super().__init__(PARAMS["streams"], streamer, **kwargs)
+
+        self._chunks["status"][0] = ""
+        self._sample_idxs["status"][0] = -1
 
     def process_packet(self, handle, packet):
         """Unpack, convert, and return packet contents."""
         name = HANDLE_NAMES[handle]
         unpacked = _unpack(packet, PACKET_FORMATS[name])
 
-        if name not in self._subscriptions:
+        if name not in self._streamer.subscriptions:
             return
 
         if name == "status":
             self._process_status(unpacked)
-            return
         else:
             data = np.array(unpacked[1:], dtype=PARAMS["streams"]["numpy_dtype"][name])
 
-        if name == "eeg":
-            idx = EEG_HANDLE_CH_IDXS[handle]
-            self._sample_idxs[name][idx] = unpacked[0]
-            self._chunks[name][idx] = CONVERT_FUNCS[name](data)
-            if handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
-                self._transmit_queue.put((name, self._sample_idxs[name],
-                                          self._chunks[name]))
-        else:
-            self._sample_idxs[name][:] = unpacked[0]
-            self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
-            self._transmit_queue.put((name, self._sample_idxs[name],
-                                      self._chunks[name]))
+            if name == "eeg":
+                idx = EEG_HANDLE_CH_IDXS[handle]
+                self._sample_idxs[name][idx] = unpacked[0]
+                self._chunks[name][idx] = CONVERT_FUNCS[name](data)
+                if not handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
+                    return
+            else:
+                self._sample_idxs[name][:] = unpacked[0]
+                self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
+
+        self._enqueue_chunk(name)
 
     def _process_status(self, unpacked):
         message_chars = [chr(i) for i in unpacked[1:]]
         status_message_partial = "".join(message_chars)[:unpacked[0]]
-        self._message += status_message_partial
+        self._chunks["status"] += status_message_partial.replace('\n', '')
         if status_message_partial[-1] == '}':
-            self._message = self._message.replace('\n', '')
             # ast.literal_eval(self._message))
             # parse and enqueue dict
-            self._transmit_queue.put(("status", [-1], self._message))
-            self._message = ""
+            self._enqueue_chunk("status")
+            self._chunks["status"][0] = ""
 
 
 def _unpack(packet, packet_format):
