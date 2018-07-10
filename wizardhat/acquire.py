@@ -14,6 +14,9 @@ Note:
     execution, but only approach it. Thus, at high process loads there may be
     momentary streaming lags.
 
+TODO:
+    * dejitter_timestamps may be irrelevant depending on ble2lsl operation
+
 .. _Lab Streaming Layer:
    https://github.com/sccn/labstreaminglayer
 """
@@ -27,31 +30,35 @@ import numpy as np
 import pylsl as lsl
 
 
-class LSLStreamer:
+class Acquirer:
     """Passes data from an LSL stream to a `data.TimeSeries` object.
 
     Attributes:
-        inlet (pylsl.StreamInlet): The LSL inlet from which to stream data.
+        inlets (dict[pylsl.StreamInlet]): The LSL inlet(s) to acquire.
         data (data.TimeSeries): Object in which the incoming data is stored,
             and which manages writing of that data to disk.
         sfreq (int): The nominal sampling frequency of the stream.
         n_chan (int): The number of channels in the stream.
         ch_names (List[str]): The names of the channels in the stream.
 
+    TODO:
+        * custom Data classes on instantiation? or pass config (e.g. windows)
+        * partial acquisition if some streams don't conform (ValueErrors in
+          init)
+        * allow inlets/data to be referenced by aliases (i.e STREAMS from
+          ble2lsl.devices)
+        * change chunk samples to reflect variation?
     """
 
-    def __init__(self, inlet=None, data_=None, dejitter=True,
+    def __init__(self, inlets=None, with_name='', dejitter=True,
                  chunk_samples=12, autostart=True, **kwargs):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
-            inlet (pylsl.StreamInlet): The LSL inlet from which to stream data.
-                By default, this is created by resolving an available LSL
-                stream through a call to `get_lsl_inlet`.
-            data_ (data.TimeSeries): Object in which the incoming data is
-                stored, and that manages writing of data to disk. By default,
-                this is instantiated based on the channel names and nominal
-                sampling frequency provided by the LSL inlet.
+            inlets (Iterable[pylsl.StreamInlet]): The LSL inlet(s) to acquire.
+                By default, all available inlets are found by `get_lsl_inlets`.
+            with_name (str): If no inlets are provided, only those inlets whose
+                name contains this string will be acquired after discovery.
             dejitter (bool): Whether to regularize inter-sample intervals.
                 If `True`, any timestamps returned by LSL are replaced by
                 evenly-spaced timestamps based on the stream's nominal sampling
@@ -64,39 +71,43 @@ class LSLStreamer:
 
         """
         # resolve LSL stream if necessary
-        if inlet is None:
-            inlet = get_lsl_inlet()
-        self.inlet = inlet
+        if inlets is None:
+            inlets = get_lsl_inlets(with_name=with_name)
+        else:
+            # convert to dict if passed as other iterable
+            try:
+                inlets.keys()
+            except AttributeError:
+                inlets = {inlet.info().name(): inlet for inlet in inlets}
+        self.inlets = inlets
 
         # acquire inlet parameters
-        info = inlet.info()
-        self.sfreq = info.nominal_srate()
-        self.n_chan = info.channel_count()
-        self.ch_names = get_ch_names(info)
-        if '' in self.ch_names:
-            raise ValueError("Empty channel name(s) in LSL stream info")
-        if not len(self.ch_names) == len(set(self.ch_names)):
-            raise ValueError("Duplicate channel names in LSL stream info")
+        self.sfreq, self.n_chan, self.ch_names, self.data = {}, {}, {}, {}
+        for name, inlet in inlets:
+            info = inlet.info()
+            self.sfreq[name] = info.nominal_srate()
+            self.n_chan[name] = info.channel_count()
+            self.ch_names[name] = get_ch_names(info)
+            if '' in self.ch_names[name]:
+                raise ValueError("Empty channel name(s) in {} stream info"\
+                                 .format(name))
+            if not len(self.ch_names[name]) == len(set(self.ch_names[name])):
+                raise ValueError("Duplicate channel names in {} stream info"\
+                                 .format(name))
 
-        # instantiate the `data.TimeSeries` instance if one is not provided
-        if data_ is None:
+            # instantiate the `data.TimeSeries` instances
             metadata = {"pipeline": [type(self).__name__]}
-            self.data = data.TimeSeries.with_window(self.ch_names,
-                                                    self.sfreq,
-                                                    metadata=metadata,
-                                                    **kwargs)
-        else:
-            # user-defined instance
-            self.data = data_
-            # TODO: do a test update to make sure it's a TimeSeries instance
-            #try:
-            #    test_samples = np.zeros(0, dtype=self.data.dtype)
-            #    self.data.update([0], test_samples)
-            #except
+            self.data[name] = data.TimeSeries.with_window(self.ch_names[name],
+                                                          self.sfreq[name],
+                                                          metadata=metadata,
+                                                          **kwargs)
 
-        # alias for `inlet.pull_chunk`
-        self._pull_chunk = lambda: inlet.pull_chunk(timeout=1.0,
-                                                    max_samples=chunk_samples)
+            # aliases for `inlet.pull_chunk`
+            self._pull_chunk = {
+                name: lambda: inlet.pull_chunk(timeout=1.0,
+                                               max_samples=chunk_samples)
+                for name, inlet in self.inlets
+            }
 
         self._dejitter = dejitter
         self._new_thread()
@@ -162,21 +173,27 @@ class LSLStreamer:
         return dejittered
 
 
-def get_lsl_inlet(stream_type='EEG'):
-    """Resolve an LSL stream and return the corresponding inlet.
+def get_lsl_inlets(with_name=None):
+    """Resolve all available LSL streams and return the corresponding inlets.
 
     Args:
-        stream_type (str): Type of LSL stream to resolve.
+        with_name (str): Return only inlets whose names contain this string.
+            Case-sensitive; e.g. "Muse" might work if "muse" doesn't.
 
     Returns:
-        pylsl.StreamInlet: LSL inlet of resolved stream.
+        dict[str, pylsl.StreamInlet]: LSL inlets of resolved streams.
+            Keys are the inlet names.
     """
-    streams = lsl.resolve_stream('type', stream_type)
+    streams = [stream for stream in lsl.resolve_streams()]
     try:
-        inlet = lsl.StreamInlet(streams[0])
+        inlets = [lsl.StreamInlet(stream) for name, stream in streams.items()]
+        inlets = {inlet.info().name(): inlet for inlet in inlets}
+        if with_name is not None:
+            inlets = {name: inlet for name, inlet in inlets.items()
+                      if with_name in name}
     except IndexError:
-        raise IOError("No stream resolved by LSL.")
-    return inlet
+        raise IOError("No streams resolved by LSL.")
+    return inlets
 
 
 def get_ch_names(info):
