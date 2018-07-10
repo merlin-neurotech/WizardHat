@@ -163,6 +163,7 @@ class Streamer(BaseStreamer):
         self._address = address
 
         # use internal timestamps if requested, or if stream is variable rate
+        # (LSL uses nominal_srate=0.0 for variable rates)
         nominal_srates = self._stream_params["nominal_srate"]
         self._internal_timestamps = {name: (internal_timestamps
                                             if nominal_srates[name] else True)
@@ -270,35 +271,37 @@ class Streamer(BaseStreamer):
 
     def _transmit_chunks(self):
         """TODO: missing chunk vs. missing sample"""
-        name, sample_idxs, chunk = self._transmit_queue.get()
-        if sample_idxs is None:
-            pass
-        self._current_chunks[name][:, :] = chunk
-        chunk_idx = sample_idxs[0]
-        if self._last_idx[name] == 0:
-            self._last_idx[name] = chunk_idx - 1
-        if not chunk_idx == self._last_idx[name] + 1:
-            print("Missing {} sample {} : {}".format(name, chunk_idx,
-                                                     self._last_idx[name]))
-        self._last_idx[name] = chunk_idx
-        sample_idxs = np.arange(self._stream_params["chunk_size"][name],
-                                dtype=np.float32)
-        if self._internal_timestamps[name]:
-            sample_idxs += self._sample_idx[name]
-        self._sample_idx[name] += self._stream_params["chunk_size"][name]
+        while True:
+            name, sample_idxs, chunk = self._transmit_queue.get()
+            print("queue size: ", self._transmit_queue.qsize())
+            if sample_idxs is None:
+                pass
+            self._current_chunks[name][:, :] = chunk
+            chunk_idx = sample_idxs[0]
+            if self._last_idx[name] == 0:
+                self._last_idx[name] = chunk_idx - 1
+            if not chunk_idx == self._last_idx[name] + 1:
+                print("Missing {} sample {} : {}".format(name, chunk_idx,
+                                                         self._last_idx[name]))
+            self._last_idx[name] = chunk_idx
+            sample_idxs = np.arange(self._stream_params["chunk_size"][name],
+                                    dtype=np.float32)
+            if self._internal_timestamps[name]:
+                sample_idxs += self._sample_idx[name]
+            self._sample_idx[name] += self._stream_params["chunk_size"][name]
 
-        # generate timestamps based on start time and nominal sample rate
-        nominal_srate = self._stream_params["nominal_srate"][name]
-        if nominal_srate:
-            timestamps = sample_idxs / nominal_srate
-        else:
-            timestamps = sample_idxs * 0.0
-        if self._internal_timestamps[name]:
-            timestamps += self._time_func()
-        else:
-            timestamps += self.start_time
-        self._chunk_timestamps[name] = timestamps
-        self._push_chunk(name)
+            # generate timestamps based on start time and nominal sample rate
+            nominal_srate = self._stream_params["nominal_srate"][name]
+            if nominal_srate:
+                timestamps = sample_idxs / nominal_srate
+            else:
+                timestamps = sample_idxs * 0.0
+            if self._internal_timestamps[name]:
+                timestamps += self._time_func()
+            else:
+                timestamps += self.start_time
+            self._chunk_timestamps[name] = timestamps
+            self._push_chunk(name)
 
     @property
     def backend(self):
