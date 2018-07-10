@@ -20,6 +20,7 @@ TODO:
    https://github.com/peplin/pygatt
 """
 
+from queue import Queue
 from struct import error as StructError
 import threading
 import time
@@ -155,7 +156,8 @@ class Streamer(BaseStreamer):
                 chunks.
         """
         BaseStreamer.__init__(self, device=device, **kwargs)
-        self._packet_handler = device.PacketHandler(self._transmit_callback,
+        self._transmit_queue = Queue()
+        self._packet_handler = device.PacketHandler(self._transmit_queue,
                                                     self._subscriptions)
         self._ble_params = self._device.PARAMS["ble"]
         self._address = address
@@ -179,7 +181,7 @@ class Streamer(BaseStreamer):
         self._scan_timeout = scan_timeout
 
         self.initialize_timestamping()
-        # self._update_thread = threading.Thread(target=self._transmit_samples)
+        self._transmit_thread = threading.Thread(target=self._transmit_chunks)
 
         if autostart:
             self.connect()
@@ -193,7 +195,7 @@ class Streamer(BaseStreamer):
 
     def start(self):
         """Start streaming by writing to the relevant GATT characteristic."""
-        # self._update_thread.start()
+        self._transmit_thread.start()
         self._ble_device.char_write(self._ble_params['send'],
                                     value=self._ble_params['stream_on'],
                                     wait_for_response=False)
@@ -266,8 +268,9 @@ class Streamer(BaseStreamer):
                 return device['address']
         raise(ValueError("No devices found with name `{}`".format(name)))
 
-    def _transmit_callback(self, name, sample_idxs, chunk):
+    def _transmit_chunks(self):
         """TODO: missing chunk vs. missing sample"""
+        name, sample_idxs, chunk = self._transmit_queue.get()
         if sample_idxs is None:
             pass
         self._current_chunks[name][:, :] = chunk
@@ -306,6 +309,7 @@ class Streamer(BaseStreamer):
     def address(self):
         """The MAC address of the device."""
         return self._address
+
 
 class Dummy(BaseStreamer):
     """Streams data over an LSL outlet from a local source.

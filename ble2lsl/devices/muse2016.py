@@ -20,8 +20,6 @@ TODO:
 from ble2lsl.devices.device import BasePacketHandler
 from ble2lsl.utils import dict_partial_from_keys
 
-import ast
-
 import bitstring
 import numpy as np
 from pygatt import BLEAddressType
@@ -115,8 +113,9 @@ EEG_HANDLE_RECEIVE_ORDER = [44, 41, 38, 32, 35]
 class PacketHandler(BasePacketHandler):
     """Process packets from the Muse 2016 headset into chunks."""
 
-    def __init__(self, callback, subscriptions, **kwargs):
-        super().__init__(stream_params=PARAMS["streams"], callback=callback,
+    def __init__(self, transmit_queue, subscriptions, **kwargs):
+        super().__init__(stream_params=PARAMS["streams"],
+                         transmit_queue=transmit_queue,
                          subscriptions=subscriptions, **kwargs)
         self._message = ""
 
@@ -139,13 +138,13 @@ class PacketHandler(BasePacketHandler):
             self._sample_idxs[name][idx] = unpacked[0]
             self._chunks[name][idx] = CONVERT_FUNCS[name](data)
             if handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
-                self._callback(name, self._sample_idxs[name],
-                               self._chunks[name])
+                self._transmit_queue.put((name, self._sample_idxs[name],
+                                          self._chunks[name]))
         else:
             self._sample_idxs[name][:] = unpacked[0]
             self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
-            self._callback(name, self._sample_idxs[name],
-                           self._chunks[name])
+            self._transmit_queue.put((name, self._sample_idxs[name],
+                                      self._chunks[name]))
 
     def _process_status(self, unpacked):
         message_chars = [chr(i) for i in unpacked[1:]]
@@ -153,9 +152,9 @@ class PacketHandler(BasePacketHandler):
         self._message += status_message_partial
         if status_message_partial[-1] == '}':
             self._message = self._message.replace('\n', '')
-            # parse and enqueue dict
-            self._callback("status", [-1], self._message)
             # ast.literal_eval(self._message))
+            # parse and enqueue dict
+            self._transmit_queue.put(("status", [-1], self._message))
             self._message = ""
 
 
