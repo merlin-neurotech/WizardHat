@@ -82,12 +82,12 @@ class BaseStreamer:
 
     def _init_lsl_outlets(self):
         """Call in subclass after acquiring address."""
-        source_id = "{}-{}".format(self._device.PARAMS['name'], self._address)
+        source_id = "{}-{}".format(self._device.NAME, self._address)
         self._info = {}
         self._outlets = {}
         for name in self._subscriptions:
             info = {arg: self._stream_params[arg][name] for arg in INFO_ARGS}
-            outlet_name = '{}-{}'.format(self._device.PARAMS['name'], name)
+            outlet_name = '{}-{}'.format(self._device.NAME, name)
             self._info[name] = lsl.StreamInfo(outlet_name, **info,
                                               source_id=source_id)
             self._add_device_info(name)

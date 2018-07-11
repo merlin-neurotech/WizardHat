@@ -13,35 +13,39 @@ NAME = "Ganglion"
 
 MANUFACTURER = "OpenBCI"
 
-SOURCES = ['eeg', 'accelerometer', 'messages']
+STREAMS = ["EEG", "accelerometer", "messages"]
 """Data provided by the OpenBCI Ganglion, and available for subscription."""
 
-DEFAULT_SUBSCRIPTIONS = ['eeg', 'messages']
+DEFAULT_SUBSCRIPTIONS = ["EEG", "messages"]
 """Streams to which to subscribe by default."""
 
-# for constructing dicts with SOURCES as keys
-sources_dict = dict_partial_from_keys(SOURCES)
+# for constructing dicts with STREAMS as keys
+streams_dict = dict_partial_from_keys(STREAMS)
 
 PARAMS = dict(
     streams=dict(
-        type=sources_dict(['EEG', 'ACC', 'STAT']),
-        channel_count=sources_dict([4, 3, 1]),
-        nominal_srate=sources_dict([200, 10, 0.0]),
-        channel_format=sources_dict(['float32', 'float32', 'string']),
-        numpy_dtype=sources_dict(['float32', 'float32', 'object']),
-        units=sources_dict([('uV',) * 4, ('g\'s',) * 3, ('',)]),
-        ch_names=sources_dict([('A', 'B', 'C', 'D'), ('x', 'y', 'z'),
+        type=streams_dict(STREAMS),  # same as stream names
+        channel_count=streams_dict([4, 3, 1]),
+        nominal_srate=streams_dict([200, 10, 0.0]),
+        channel_format=streams_dict(['float32', 'float32', 'string']),
+        numpy_dtype=streams_dict(['float32', 'float32', 'object']),
+        units=streams_dict([('uV',) * 4, ('g\'s',) * 3, ('',)]),
+        ch_names=streams_dict([('A', 'B', 'C', 'D'), ('x', 'y', 'z'),
                                ('message',)]),
-        chunk_size=sources_dict([1, 1, 1]),
+        chunk_size=streams_dict([1, 1, 1]),
     ),
     ble=dict(
         address_type=BLEAddressType.random,
         # service='fe84',
         interval_min=6,  # OpenBCI suggest 9
         interval_max=11,  # suggest 10
-        eeg="2d30c082f39f4ce6923f3484ea480596",
+
+        # receive characteristic UUIDs
+        EEG=["2d30c082f39f4ce6923f3484ea480596"],
         accelerometer='',  # placeholder; already subscribed through eeg
         messages='',  # placeholder; subscription not required
+
+        # send characteristic UUID and commands
         send="2d30c083f39f4ce6923f3484ea480596",
         stream_on=b'b',
         stream_off=b's',
@@ -49,17 +53,19 @@ PARAMS = dict(
         accelerometer_off=b'N',
         # impedance_on=b'z',
         # impedance_off=b'Z',
+
+        # other characteristics
         # disconnect="2d30c084f39f4ce6923f3484ea480596",
     ),
 )
 """OpenBCI Ganglion LSL- and BLE-related parameters."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
-CONVERT_FUNCS = sources_dict([lambda x: x * 1200 / (8388607.0 * 1.5 * 51.0),
+CONVERT_FUNCS = streams_dict([lambda x: x * 1200 / (8388607.0 * 1.5 * 51.0),
                               lambda x: 0.016 * x,
                               lambda x: x,  # not used (messages)
                               ])
-ID_TURNOVER = sources_dict([201, 10])
+ID_TURNOVER = streams_dict([201, 10])
 """The number of samples processed before the packet ID cycles back to zero."""
 
 
@@ -69,11 +75,12 @@ class PacketHandler(BasePacketHandler):
     def __init__(self, streamer, **kwargs):
         super().__init__(PARAMS["streams"], streamer, **kwargs)
 
+        self._last_eeg_data = np.zeros(self._chunks["EEG"].shape[0])
         self._chunks["messages"][0] = ""
         self._sample_idxs["messages"][0] = -1
-        self._sample_ids = sources_dict([-1] * len(SOURCES))
+        self._sample_ids = streams_dict([-1] * len(STREAMS))
 
-        if 'accelerometer' in self._streamer.subscriptions:
+        if "accelerometer" in self._streamer.subscriptions:
             # queue accelerometer_on command
             self._streamer.send_command(PARAMS["ble"]["accelerometer_on"])
 
@@ -107,6 +114,9 @@ class PacketHandler(BasePacketHandler):
         if sample_id < self._sample_ids[name]:
             self._sample_idxs[name][0] += ID_TURNOVER[name]
         self._sample_ids[name] = sample_id
+
+        if name == "EEG":
+            self._chunks[name][:, -1] = np.copy(self._last_eeg_data)
         self._chunks[name] = CONVERT_FUNCS[name](self._chunks[name])
         self._enqueue_chunk(name)
 
@@ -126,18 +136,18 @@ class PacketHandler(BasePacketHandler):
         if bad_data_size(packet, 19, "uncompressed data"):
             return
         # 4 channels of 24bits
-        self._chunks["eeg"][:] = [[int_from_24bits(packet[i:i + 3])]
+        self._last_eeg_data[:] = [int_from_24bits(packet[i:i + 3])
                                   for i in range(0, 12, 3)]
         # = np.array([chan_data], dtype=np.float32).T
-        self._update_counts_and_enqueue("eeg", packet_id)
+        self._update_counts_and_enqueue("EEG", packet_id)
 
     def _update_data_with_deltas(self, packet_id, deltas):
         for delta_id in [0, 1]:
             # convert from packet to sample ID
             sample_id = (packet_id - 1) * 2 + delta_id + 1
             # 19bit packets hold deltas between two samples
-            self._chunks["eeg"] -= deltas[delta_id, :].reshape(4, 1)
-            self._update_counts_and_enqueue("eeg", sample_id)
+            self._last_eeg_data -= deltas[delta_id, :]
+            self._update_counts_and_enqueue("EEG", sample_id)
 
     def _parse_compressed_19bit(self, packet_id, packet):
         """Parse a 19-bit compressed packet without accelerometer data."""

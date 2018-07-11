@@ -25,13 +25,14 @@ from wizardhat import data
 
 from serial.serialutil import SerialException
 import threading
+import time
 
 import numpy as np
 import pylsl as lsl
 
 
-class Acquirer:
-    """Passes data from an LSL stream to a `data.TimeSeries` object.
+class Receiver:
+    """Receives data from one or more LSL streams associated with a device.
 
     Attributes:
         inlets (dict[pylsl.StreamInlet]): The LSL inlet(s) to acquire.
@@ -50,67 +51,85 @@ class Acquirer:
         * change chunk samples to reflect variation?
     """
 
-    def __init__(self, inlets=None, with_name='', dejitter=True,
-                 chunk_samples=12, autostart=True, **kwargs):
+    def __init__(self, source_id=None, with_types=('',), dejitter=True,
+                 max_chunklen=0, autostart=True, **kwargs):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
-            inlets (Iterable[pylsl.StreamInlet]): The LSL inlet(s) to acquire.
-                By default, all available inlets are found by `get_lsl_inlets`.
-            with_name (str): If no inlets are provided, only those inlets whose
-                name contains this string will be acquired after discovery.
+            source_id (str): Full or partial source ID for the streamed device.
+            with_types (Iterable[str]): If no streams are provided, only those
+                matching one of these types will be acquired. For example,
+                `with_types=('EEG', 'accelerometer')`.
             dejitter (bool): Whether to regularize inter-sample intervals.
                 If `True`, any timestamps returned by LSL are replaced by
                 evenly-spaced timestamps based on the stream's nominal sampling
                 frequency. Cannot be changed after instantiation due to the
                 inconsistencies this would introduce in the resulting data.
-            chunk_samples (int): Maximum number of samples per chunk pulled
-                from the inlet.
+            max_chunklen (int): Maximum number of samples per chunk pulled
+                from the inlets. Default: 0 (determined at stream outlet).
             autostart (bool): Whether to start streaming on instantiation.
             kwargs: Additional keyword arguments to default `data.TimeSeries`.
 
         """
-        # resolve LSL stream if necessary
-        if inlets is None:
-            inlets = get_lsl_inlets(with_name=with_name)
-        else:
-            # convert to dict if passed as other iterable
-            try:
-                inlets.keys()
-            except AttributeError:
-                inlets = {inlet.info().name(): inlet for inlet in inlets}
-        self.inlets = inlets
+        streams = get_lsl_streams()
+        source_ids = list(streams.keys())
+
+        if source_id is None or source_id not in source_ids:
+            # if multiple sources detected, let user choose from a menu
+            if len(source_ids) > 1:
+                menu = '\n'.join("{}. {}".format(i, sid)
+                                 for i, sid in enumerate(source_ids))
+                select = "Selection [0-{}]: ".format(len(source_ids) - 1)
+                print("Multiple source IDs detected.")
+                print("Choose from the following list:")
+                print(menu)
+                while source_id is None:
+                    try:
+                        source_id = source_ids[int(input(select))]
+                    except (ValueError, IndexError):
+                        print("Invalid selection! Try again.")
+            else:
+                source_id = source_ids[0]
+            print("Using source with ID {}".format(source_id))
+
+        self._inlets = get_lsl_inlets(streams,
+                                      with_types=with_types,
+                                      with_source_ids=(source_id,),
+                                      max_chunklen=max_chunklen)[source_id]
+        self._source_id = source_id
 
         # acquire inlet parameters
         self.sfreq, self.n_chan, self.ch_names, self.data = {}, {}, {}, {}
-        for name, inlet in inlets:
+        for name, inlet in self._inlets.items():
             info = inlet.info()
             self.sfreq[name] = info.nominal_srate()
             self.n_chan[name] = info.channel_count()
             self.ch_names[name] = get_ch_names(info)
             if '' in self.ch_names[name]:
-                raise ValueError("Empty channel name(s) in {} stream info"\
-                                 .format(name))
+                print("Empty channel name(s) in {} stream info"\
+                      .format(name))
             if not len(self.ch_names[name]) == len(set(self.ch_names[name])):
-                raise ValueError("Duplicate channel names in {} stream info"\
-                                 .format(name))
+                print("Duplicate channel names in {} stream info"\
+                      .format(name))
 
             # instantiate the `data.TimeSeries` instances
             metadata = {"pipeline": [type(self).__name__]}
             self.data[name] = data.TimeSeries.with_window(self.ch_names[name],
                                                           self.sfreq[name],
                                                           metadata=metadata,
+                                                          label=info.name(),
                                                           **kwargs)
 
             # aliases for `inlet.pull_chunk`
             self._pull_chunk = {
                 name: lambda: inlet.pull_chunk(timeout=1.0,
-                                               max_samples=chunk_samples)
-                for name, inlet in self.inlets
+                                               max_samples=max_chunklen)
+                for name, inlet in self._inlets.items()
             }
 
         self._dejitter = dejitter
-        self._new_thread()
+        self._threads = {}
+        self._new_threads()
         if autostart:
             self.start()
 
@@ -127,77 +146,164 @@ class Acquirer:
         TODO:
             * TimeSeries effects (e.g. warn about discontinuity on restart)
         """
+        self._proceed = True
         try:
-            self._thread.start()
+            for name in self._inlets:
+                self._threads[name].start()
         except RuntimeError:
-            if self._thread.ident:
-                # thread exists but has stopped; create and start a new thread
-                self._new_thread()
-                self._thread.start()
-            else:
-                print("Streaming has already started!")
+            for name in self._inlets:
+                if self._thread.ident:
+                    # thread exists but has stopped; create and start a new thread
+                    self._new_threads([name])
+                    self._threads[name].start()
+                else:
+                    print("Streaming has already started!")
 
     def stop(self):
         """Stop data streaming."""
         self._proceed = False
 
-    def _stream(self):
+    def _receive(self, name):
         """Streaming thread."""
         try:
             while self._proceed:
-                samples, timestamps = self._pull_chunk()
+                samples, timestamps = self._pull_chunk[name]()
                 if timestamps:
                     if self._dejitter:
-                        timestamps = self._dejitter_timestamps(timestamps)
-                    self.data.update(timestamps, samples)
+                        timestamps = self._dejitter_timestamps(name,
+                                                               timestamps)
+                    try:
+                        self.data[name].update(timestamps, samples)
+                    except ValueError:
+                        print(name, '\n', len(samples[0]))
 
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")
 
         finally:
             # write any remaining samples in `self.data` to file
-            self.data.write_to_file()
+            self.data[name].write_to_file()
 
-    def _new_thread(self):
+    def _new_threads(self, names=None):
         # break loop in `stream` to cause thread to return
+        if names is None:
+            names = self._inlets.keys()
         self._proceed = False
-        # create new thread
-        self._thread = threading.Thread(target=self._stream)
+        # create new threads
+        for name in names:
+            self._threads[name] = threading.Thread(target=self._receive,
+                                                   kwargs=dict(name=name))
         self._proceed = True
 
-    def _dejitter_timestamps(self, timestamps):
+    def _dejitter_timestamps(self, name, timestamps):
         """Partial function for more concise call during loop."""
-        last_time = self.data.last_sample['time']
-        dejittered = dejitter_timestamps(timestamps, sfreq=self.sfreq,
-                                         last_time=last_time)
+        last_time = self.data[name].last_sample['time']
+        if self.sfreq[name] > 0:
+            dejittered = dejitter_timestamps(timestamps,
+                                             sfreq=self.sfreq[name],
+                                             last_time=last_time)
+        else:
+            dejittered = timestamps
         return dejittered
 
 
-def get_lsl_inlets(with_name=None):
-    """Resolve all available LSL streams and return the corresponding inlets.
-
-    Args:
-        with_name (str): Return only inlets whose names contain this string.
-            Case-sensitive; e.g. "Muse" might work if "muse" doesn't.
+def get_lsl_streams():
+    """Discover all LSL streams available on the local network.
 
     Returns:
-        dict[str, pylsl.StreamInlet]: LSL inlets of resolved streams.
-            Keys are the inlet names.
+        dict[str, dict[str, pylsl.StreamInfo]]: Streams mapped to source/type.
+            Keys are source IDs; values are dictionaries for which the keys
+            are stream types and the values are stream.
+
+    Example:
+        When EEG and accelerometer streams are found for a single Muse headset:
+
+        >>> get_lsl_streams()
+        {'Muse-00:00:00:00:00:00': {'EEG': <pylsl.pylsl.StreamInfo>,
+                                    'accelerometer': <pylsl.pylsl.StreamInfo>}}
     """
-    streams = [stream for stream in lsl.resolve_streams()]
-    try:
-        inlets = [lsl.StreamInlet(stream) for name, stream in streams.items()]
-        inlets = {inlet.info().name(): inlet for inlet in inlets}
-        if with_name is not None:
-            inlets = {name: inlet for name, inlet in inlets.items()
-                      if with_name in name}
-    except IndexError:
-        raise IOError("No streams resolved by LSL.")
+    streams = [(stream.source_id(), stream.type(), stream)
+               for stream in lsl.resolve_streams()]
+    streams_dict = streams_dict_from_streams(streams)
+    return streams_dict
+
+
+def streams_dict_from_streams(streams):
+    """Convert a list of stream info objects into a source/type mapping.
+
+    Args:
+        streams (Iterable[pylsl.StreamInfo]): List of stream info objects,
+            typically as returned by `pylsl.resolve_streams()`.
+
+    Returns:
+        dict[str, dict[str, pylsl.StreamInfo]]: Streams mapped to source/type.
+            Keys are source IDs; values are dictionaries for which the keys
+            are stream types and the values are stream.
+    """
+    source_ids = set(stream[0] for stream in streams)
+    streams_dict = dict.fromkeys(source_ids, {})
+    for source_id, stream_type, stream_info in streams:
+        streams_dict[source_id][stream_type] = stream_info
+    return streams_dict
+
+
+def get_source_ids():
+    """Convenience function to list available LSL sources (i.e. devices)."""
+    source_ids = tuple(get_lsl_streams().keys())
+    return source_ids
+
+
+def get_lsl_inlets(streams=None, with_source_ids=('',), with_types=('',),
+                   max_chunklen=0):
+    """Return LSL stream inlets for given/discovered LSL streams.
+
+    If `streams` is not given, will automatically discover all available
+    streams.
+
+    Args:
+        streams: List of `pylsl.StreamInfo` or source/type mapping.
+            See `streams_dict_from_streams` for additional documentation
+            of the difference between the two data types.
+        with_source_id (Iterable[str]): Return only inlets whose source ID
+            contains one of these strings.
+            Case-sensitive; e.g. "Muse" might work if "muse" doesn't.
+        with_type (Iterable[str]): Return only inlets with these stream types.
+
+    Returns:
+        dict[str, dict[str, pylsl.StreamInlet]]: LSL inlet objects.
+            Keys are the source IDs; values are dicts where the keys are stream
+            types and values are stream inlets.
+    """
+    if streams is None:
+        streams = get_lsl_streams()
+    else:
+        # ensure streams is in streams_dict format
+        try:  # quack
+            streams.keys()
+            list(streams.values())[0].keys()
+        except AttributeError:
+            streams = streams_dict_from_streams(streams)
+    streams_dict = streams
+
+    inlets = dict.fromkeys(streams_dict.keys(), {})
+    for source_id, streams in streams_dict.items():
+        if any(id_str in source_id for id_str in with_source_ids):
+            for stream_type, stream in streams.items():
+                if any(type_str in stream_type for type_str in with_types):
+                    inlets[source_id][stream_type] = lsl.StreamInlet(stream)
+
+    # make sure no empty devices are included following inclusion rules
+    inlets = {source_id: inlets for source_id, inlets in inlets.items()
+              if not inlets == {}}
+
+    if inlets == {}:
+        print("No inlets created based on the available streams/given rules")
+
     return inlets
 
 
 def get_ch_names(info):
-    """Return the channel names associated with an LSL inlet.
+    """Return the channel names associated with an LSL stream.
 
     Args:
         info ():
@@ -223,8 +329,8 @@ def dejitter_timestamps(timestamps, sfreq, last_time=None):
                timestamps. Defaults to `-1/sfreq`.
     """
     if last_time is None:
-        last_time = -1/sfreq
+        last_time = -1 / sfreq
     dejittered = np.arange(len(timestamps), dtype=np.float64)
     dejittered /= sfreq
-    dejittered += last_time + 1/sfreq
+    dejittered += last_time + 1 / sfreq
     return dejittered

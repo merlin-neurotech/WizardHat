@@ -12,6 +12,7 @@ TODO:
     * verify sample ID is chunk ID
     * don't use lambdas for CONVERT_FUNCS?
     * save Muse address to minimize connect time?
+    * packet ID rollover (uint16) -- generalize in device file?
 
 .. _Available Data - Muse Direct:
    http://developer.choosemuse.com/tools/windows-tools/available-data-muse-direct
@@ -27,36 +28,36 @@ from pygatt import BLEAddressType
 NAME = 'Muse'
 MANUFACTURER = 'Interaxon'
 
-SOURCES = ['EEG', 'accelerometer', 'gyroscope', 'telemetry', 'status']
+STREAMS = ['EEG', 'accelerometer', 'gyroscope', 'telemetry', 'status']
 """Data sources provided by the Muse 2016 headset."""
 
-DEFAULT_SUBSCRIPTIONS = SOURCES
+DEFAULT_SUBSCRIPTIONS = STREAMS
 """Sources to which to subscribe by default."""
 
-# for constructing dicts with SOURCES as keys
-sources_dict = dict_partial_from_keys(SOURCES)
+# for constructing dicts with STREAMS as keys
+streams_dict = dict_partial_from_keys(STREAMS)
 
 PARAMS = dict(
     streams=dict(
-        type=sources_dict(SOURCES),  # identity mapping. best solution?
-        channel_count=sources_dict([5, 3, 3, 4, 1]),
-        nominal_srate=sources_dict([256, 52, 52, 0.1, 0.0]),
-        channel_format=sources_dict(['float32', 'float32', 'float32',
+        type=streams_dict(STREAMS),  # identity mapping. best solution?
+        channel_count=streams_dict([5, 3, 3, 4, 1]),
+        nominal_srate=streams_dict([256, 52, 52, 0.1, 0.0]),
+        channel_format=streams_dict(['float32', 'float32', 'float32',
                                      'float32', 'string']),
-        numpy_dtype=sources_dict(['float32', 'float32', 'float32', 'float32',
+        numpy_dtype=streams_dict(['float32', 'float32', 'float32', 'float32',
                                   'object']),
-        units=sources_dict([('uV',) * 5,
+        units=streams_dict([('uV',) * 5,
                             ('g\'s',) * 3,
                             ('deg/s',) * 3,
                             ('%', 'mV', 'mV', 'C'),
                             ('',)]),
-        ch_names=sources_dict([('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
+        ch_names=streams_dict([('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
                                ('x', 'y', 'z'),
                                ('x', 'y', 'z'),
                                ('battery', 'fuel_gauge', 'adc_volt',
                                 'temperature'),
                                ('message',)]),
-        chunk_size=sources_dict([12, 3, 3, 1, 1]),
+        chunk_size=streams_dict([12, 3, 3, 1, 1]),
     ),
 
     ble=dict(
@@ -64,20 +65,20 @@ PARAMS = dict(
         interval_min=60,  # pygatt default, seems fine
         interval_max=76,  # pygatt default
 
-        # characteristic UUIDs
-        eeg=['273e0003-4c4d-454d-96be-f03bac821358',
+        # receive characteristic UUIDs
+        EEG=['273e0003-4c4d-454d-96be-f03bac821358',
              '273e0004-4c4d-454d-96be-f03bac821358',
              '273e0005-4c4d-454d-96be-f03bac821358',
              '273e0006-4c4d-454d-96be-f03bac821358',
              '273e0007-4c4d-454d-96be-f03bac821358'],
-        # reference='273e0008-4c4d-454d-96be-f03bac821358',
+        # reference=['273e0008-4c4d-454d-96be-f03bac821358'],
         accelerometer='273e000a-4c4d-454d-96be-f03bac821358',
         gyroscope='273e0009-4c4d-454d-96be-f03bac821358',
         telemetry='273e000b-4c4d-454d-96be-f03bac821358',
         status='273e0001-4c4d-454d-96be-f03bac821358',  # same as send
-        send='273e0001-4c4d-454d-96be-f03bac821358',
 
-        # commands (write to send characteristic)
+        # send characteristic UUID and commands
+        send='273e0001-4c4d-454d-96be-f03bac821358',
         stream_on=(0x02, 0x64, 0x0a),  # b'd'
         stream_off=(0x02, 0x68, 0x0a),  # ?
         # keep_alive=(0x02, 0x6b, 0x0a), # (?) b'k'
@@ -89,18 +90,18 @@ PARAMS = dict(
 """Muse 2016 LSL- and BLE-related parameters."""
 
 HANDLE_NAMES = {14: "status", 26: "telemetry", 23: "accelerometer",
-                20: "gyroscope", 32: "eeg", 35: "eeg", 38: "eeg", 41: "eeg",
-                44: "eeg"}
+                20: "gyroscope", 32: "EEG", 35: "EEG", 38: "EEG", 41: "EEG",
+                44: "EEG"}
 """Stream name associated with each packet handle."""
 
-PACKET_FORMATS = sources_dict(['uint:16' + ',uint:12' * 12,
+PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * 12,
                                'uint:16' + ',int:16' * 9,
                                'uint:16' + ',int:16' * 9,
                                'uint:16' + ',uint:16' * 4,
                                ','.join(['uint:8'] * 20)])
 """Byte formats of the incoming packets."""
 
-CONVERT_FUNCS = sources_dict([lambda data: 0.48828125 * (data - 2048),
+CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
                               lambda data: 0.0000610352 * data.reshape((3, 3)).T,
                               lambda data: 0.0074768 * data.reshape((3, 3)).T,
                               lambda data: np.array([data[0] / 512,
@@ -137,7 +138,7 @@ class PacketHandler(BasePacketHandler):
             data = np.array(unpacked[1:],
                             dtype=PARAMS["streams"]["numpy_dtype"][name])
 
-            if name == "eeg":
+            if name == "EEG":
                 idx = EEG_HANDLE_CH_IDXS[handle]
                 self._sample_idxs[name][idx] = unpacked[0]
                 self._chunks[name][idx] = CONVERT_FUNCS[name](data)

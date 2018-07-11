@@ -314,7 +314,11 @@ class TimeSeries(Data):
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         stacked = [(t,) + tuple(s) for t, s in zip(timestamps, samples)]
-        return np.array(stacked, dtype=self._dtype)
+        try:
+            stacked_ = np.array(stacked, dtype=self._dtype)
+        except ValueError:
+            raise ValueError(str(stacked))
+        return stacked_
 
     @property
     def n_samples(self):
