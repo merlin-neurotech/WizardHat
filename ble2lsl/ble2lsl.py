@@ -106,10 +106,9 @@ class BaseStreamer:
         """Adds device-specific parameters to `info`."""
         desc = self._info[name].desc()
         try:
-            desc.append_child_value("manufacturer",
-                                    self._device.PARAMS["manufacturer"])
+            desc.append_child_value("manufacturer", self._device.MANUFACTURER)
         except KeyError:
-            warn("Manufacturer not specified in device PARAMS")
+            warn("Manufacturer not specified in device file")
 
         channels = desc.append_child("channels")
         try:
@@ -131,6 +130,9 @@ class Streamer(BaseStreamer):
         address (str): Device-specific (MAC) address.
         start_time (float): Time of timestamp initialization by `initialize`.
             Provided by `time_func`.
+
+    TODO:
+        * Multiple devices with same name
     """
 
     def __init__(self, device, address=None, backend='bgapi', interface=None,
@@ -245,7 +247,7 @@ class Streamer(BaseStreamer):
 
         if self._address is None:
             # get the device address if none was provided
-            self._address = self._resolve_address(self._device.PARAMS["name"])
+            self._address = self._resolve_address(self._device.NAME)
         try:
             self._ble_device = self._adapter.connect(self._address,
                 address_type=self._ble_params['address_type'],

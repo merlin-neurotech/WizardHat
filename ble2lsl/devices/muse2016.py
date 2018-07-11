@@ -24,40 +24,41 @@ import bitstring
 import numpy as np
 from pygatt import BLEAddressType
 
-STREAMS = ['eeg', 'accelerometer', 'gyroscope', 'telemetry', 'status']
-"""Data provided by the Muse 2016 headset, and available for subscription
-over BLE."""
+NAME = 'Muse'
+MANUFACTURER = 'Interaxon'
 
-DEFAULT_SUBSCRIPTIONS = STREAMS
-"""Streams to which to subscribe by default."""
+SOURCES = ['EEG', 'accelerometer', 'gyroscope', 'telemetry', 'status']
+"""Data sources provided by the Muse 2016 headset."""
 
-# for constructing dicts with STREAMS as keys
-streams_dict = dict_partial_from_keys(STREAMS)
+DEFAULT_SUBSCRIPTIONS = SOURCES
+"""Sources to which to subscribe by default."""
+
+# for constructing dicts with SOURCES as keys
+sources_dict = dict_partial_from_keys(SOURCES)
 
 PARAMS = dict(
-    manufacturer='Interaxon',
-    name='Muse',
     streams=dict(
-        type=streams_dict(['EEG', 'ACC', 'GYR', 'TLM', 'STAT']),  # XDF
-        channel_count=streams_dict([5, 3, 3, 4, 1]),
-        nominal_srate=streams_dict([256, 52, 52, 0.1, 0.0]),
-        channel_format=streams_dict(['float32', 'float32', 'float32',
+        type=sources_dict(SOURCES),  # identity mapping. best solution?
+        channel_count=sources_dict([5, 3, 3, 4, 1]),
+        nominal_srate=sources_dict([256, 52, 52, 0.1, 0.0]),
+        channel_format=sources_dict(['float32', 'float32', 'float32',
                                      'float32', 'string']),
-        numpy_dtype=streams_dict(['float32', 'float32', 'float32', 'float32',
+        numpy_dtype=sources_dict(['float32', 'float32', 'float32', 'float32',
                                   'object']),
-        units=streams_dict([('uV',) * 5,
-                            ('milli-g',) * 3,
+        units=sources_dict([('uV',) * 5,
+                            ('g\'s',) * 3,
                             ('deg/s',) * 3,
                             ('%', 'mV', 'mV', 'C'),
                             ('',)]),
-        ch_names=streams_dict([('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
+        ch_names=sources_dict([('TP9', 'AF7', 'AF8', 'TP10', 'Right AUX'),
                                ('x', 'y', 'z'),
                                ('x', 'y', 'z'),
                                ('battery', 'fuel_gauge', 'adc_volt',
                                 'temperature'),
                                ('message',)]),
-        chunk_size=streams_dict([12, 3, 3, 1, 1]),
+        chunk_size=sources_dict([12, 3, 3, 1, 1]),
     ),
+
     ble=dict(
         address_type=BLEAddressType.public,
         interval_min=60,  # pygatt default, seems fine
@@ -83,23 +84,23 @@ PARAMS = dict(
         # request_info=(0x03, 0x76, 0x31, 0x0a),
         # request_status=(0x02, 0x73, 0x0a),
         # reset=(0x03, 0x2a, 0x31, 0x0a)
-    ),
+    )
 )
-"""Muse headset parameters, including BLE characteristics."""
+"""Muse 2016 LSL- and BLE-related parameters."""
 
 HANDLE_NAMES = {14: "status", 26: "telemetry", 23: "accelerometer",
                 20: "gyroscope", 32: "eeg", 35: "eeg", 38: "eeg", 41: "eeg",
                 44: "eeg"}
 """Stream name associated with each packet handle."""
 
-PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * 12,
+PACKET_FORMATS = sources_dict(['uint:16' + ',uint:12' * 12,
                                'uint:16' + ',int:16' * 9,
                                'uint:16' + ',int:16' * 9,
                                'uint:16' + ',uint:16' * 4,
                                ','.join(['uint:8'] * 20)])
 """Byte formats of the incoming packets."""
 
-CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
+CONVERT_FUNCS = sources_dict([lambda data: 0.48828125 * (data - 2048),
                               lambda data: 0.0000610352 * data.reshape((3, 3)).T,
                               lambda data: 0.0074768 * data.reshape((3, 3)).T,
                               lambda data: np.array([data[0] / 512,
@@ -133,7 +134,8 @@ class PacketHandler(BasePacketHandler):
         if name == "status":
             self._process_status(unpacked)
         else:
-            data = np.array(unpacked[1:], dtype=PARAMS["streams"]["numpy_dtype"][name])
+            data = np.array(unpacked[1:],
+                            dtype=PARAMS["streams"]["numpy_dtype"][name])
 
             if name == "eeg":
                 idx = EEG_HANDLE_CH_IDXS[handle]

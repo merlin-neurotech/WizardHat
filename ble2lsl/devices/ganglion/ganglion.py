@@ -9,27 +9,30 @@ from warnings import warn
 import numpy as np
 from pygatt import BLEAddressType
 
-STREAMS = ['eeg', 'accelerometer', 'messages']
+NAME = "Ganglion"
+
+MANUFACTURER = "OpenBCI"
+
+SOURCES = ['eeg', 'accelerometer', 'messages']
 """Data provided by the OpenBCI Ganglion, and available for subscription."""
 
 DEFAULT_SUBSCRIPTIONS = ['eeg', 'messages']
 """Streams to which to subscribe by default."""
 
-# for constructing dicts with STREAMS as keys
-streams_dict = dict_partial_from_keys(STREAMS)
+# for constructing dicts with SOURCES as keys
+sources_dict = dict_partial_from_keys(SOURCES)
 
 PARAMS = dict(
-    manufacturer='OpenBCI',
-    name='Ganglion',
     streams=dict(
-        type=streams_dict(['EEG', 'ACC', 'STAT']),
-        channel_count=streams_dict([4, 3, 1]),
-        nominal_srate=streams_dict([200, 10, 0.0]),
-        channel_format=streams_dict(['float32', 'float32', 'string']),
-        numpy_dtype=streams_dict(['float32', 'float32', 'object']),
-        units=streams_dict([('uV',) * 4, ('milli-g',) * 3, ('message',)]),
-        ch_names=streams_dict([('A', 'B', 'C', 'D'), ('x', 'y', 'z'), ('',)]),
-        chunk_size=streams_dict([1, 1, 1]),
+        type=sources_dict(['EEG', 'ACC', 'STAT']),
+        channel_count=sources_dict([4, 3, 1]),
+        nominal_srate=sources_dict([200, 10, 0.0]),
+        channel_format=sources_dict(['float32', 'float32', 'string']),
+        numpy_dtype=sources_dict(['float32', 'float32', 'object']),
+        units=sources_dict([('uV',) * 4, ('g\'s',) * 3, ('',)]),
+        ch_names=sources_dict([('A', 'B', 'C', 'D'), ('x', 'y', 'z'),
+                               ('message',)]),
+        chunk_size=sources_dict([1, 1, 1]),
     ),
     ble=dict(
         address_type=BLEAddressType.random,
@@ -49,16 +52,15 @@ PARAMS = dict(
         # disconnect="2d30c084f39f4ce6923f3484ea480596",
     ),
 )
-"""General OpenBCI Ganglion parameters, including BLE characteristics."""
+"""OpenBCI Ganglion LSL- and BLE-related parameters."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
-ID_TURNOVER = streams_dict([PARAMS["streams"]["nominal_srate"]["eeg"] + 1,
-                            PARAMS["streams"]["nominal_srate"]["accelerometer"]
-                            ])
-CONVERT_FUNCS = streams_dict([lambda x: x * 1200 / (8388607.0 * 1.5 * 51.0),  # uV/count
-                              lambda x: 0.000016 * x,
+CONVERT_FUNCS = sources_dict([lambda x: x * 1200 / (8388607.0 * 1.5 * 51.0),
+                              lambda x: 0.016 * x,
                               lambda x: x,  # not used (messages)
                               ])
+ID_TURNOVER = sources_dict([201, 10])
+"""The number of samples processed before the packet ID cycles back to zero."""
 
 
 class PacketHandler(BasePacketHandler):
@@ -69,7 +71,7 @@ class PacketHandler(BasePacketHandler):
 
         self._chunks["messages"][0] = ""
         self._sample_idxs["messages"][0] = -1
-        self._sample_ids = streams_dict([-1] * len(STREAMS))
+        self._sample_ids = sources_dict([-1] * len(SOURCES))
 
         if 'accelerometer' in self._streamer.subscriptions:
             # queue accelerometer_on command
@@ -124,7 +126,7 @@ class PacketHandler(BasePacketHandler):
         if bad_data_size(packet, 19, "uncompressed data"):
             return
         # 4 channels of 24bits
-        self._chunks["eeg"][:] = [[int_from_24bits(packet[i : i + 3])]
+        self._chunks["eeg"][:] = [[int_from_24bits(packet[i:i + 3])]
                                   for i in range(0, 12, 3)]
         # = np.array([chan_data], dtype=np.float32).T
         self._update_counts_and_enqueue("eeg", packet_id)
@@ -169,6 +171,8 @@ class PacketHandler(BasePacketHandler):
 
         After turning on impedance checking, takes a few seconds to complete.
         """
+        raise NotImplementedError  # until this is sorted out...
+
         if packet[-2:] != 'Z\n':
             print("Wrong format for impedance: not ASCII ending with 'Z\\n'")
 
@@ -178,6 +182,7 @@ class PacketHandler(BasePacketHandler):
         self.last_impedance[packet_id - 201] = imp_value
         self.push_sample(packet_id - 200, self._data,
                          self.last_accelerometer, self.last_impedance)
+
 
 def int_from_24bits(unpacked):
     """Convert 24-bit data coded on 3 bytes to a proper integer."""
@@ -240,10 +245,7 @@ def int8_from_byte(byte):
 
 
 def decompress_deltas_19bit(buffer):
-    """Called to when a compressed packet is received.
-    buffer: Just the data portion of the sample. So 19 bytes.
-    return {Array} - An array of deltas of shape 2x4 (2 samples per packet and 4 channels per sample.)
-    """
+    """Parse packet deltas from 19-bit compression format."""
     if bad_data_size(buffer, 19, "19-byte compressed packet"):
         raise ValueError("Bad input size for byte conversion.")
 
@@ -299,10 +301,7 @@ def decompress_deltas_19bit(buffer):
 
 
 def decompress_deltas_18bit(buffer):
-    """Called to when a compressed packet is received.
-    buffer: Just the data portion of the sample. So 19 bytes.
-    return {Array} - An array of deltas of shape 2x4 (2 samples per packet and 4 channels per sample.)
-    """
+    """Parse packet deltas from 18-byte compression format."""
     if bad_data_size(buffer, 18, "18-byte compressed packet"):
         raise ValueError("Bad input size for byte conversion.")
 
