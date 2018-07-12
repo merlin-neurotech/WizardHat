@@ -77,7 +77,7 @@ attribute of the respective device file.
    https://github.com/sccn/xdf/wiki/Specifications
 """
 
-from ble2lsl import empty_chunks, empty_chunk_timestamps
+from ble2lsl import empty_chunks, stream_idxs_zeros
 
 import numpy as np
 
@@ -98,9 +98,7 @@ class BasePacketHandler:
 
         subscriptions = self._streamer.subscriptions
         self._chunks = empty_chunks(stream_params, subscriptions)
-        self._sample_idxs = empty_chunk_timestamps(stream_params,
-                                                   subscriptions,
-                                                   dtype=int)
+        self._chunk_idxs = stream_idxs_zeros(subscriptions)
 
     def process_packet(self, handle, packet):
         """BLE2LSL passes incoming BLE packets to this method for parsing."""
@@ -109,6 +107,6 @@ class BasePacketHandler:
     def _enqueue_chunk(self, name):
         """Ensure copies are returned."""
         self._transmit_queue.put((name,
-                                  np.copy(self._sample_idxs[name]),
+                                  self._chunk_idxs[name],
                                   np.copy(self._chunks[name])
                                   ))

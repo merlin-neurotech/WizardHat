@@ -122,7 +122,7 @@ class PacketHandler(BasePacketHandler):
         super().__init__(PARAMS["streams"], streamer, **kwargs)
 
         self._chunks["status"][0] = ""
-        self._sample_idxs["status"][0] = -1
+        self._chunk_idxs["status"] = -1
 
     def process_packet(self, handle, packet):
         """Unpack, convert, and return packet contents."""
@@ -140,15 +140,14 @@ class PacketHandler(BasePacketHandler):
 
             if name == "EEG":
                 idx = EEG_HANDLE_CH_IDXS[handle]
-                self._sample_idxs[name][idx] = unpacked[0]
                 self._chunks[name][idx] = CONVERT_FUNCS[name](data)
                 if not handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
                     return
             else:
-                self._sample_idxs[name][:] = unpacked[0]
                 self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
 
-        self._enqueue_chunk(name)
+            self._chunk_idxs[name] = unpacked[0]
+            self._enqueue_chunk(name)
 
     def _process_status(self, unpacked):
         message_chars = [chr(i) for i in unpacked[1:]]

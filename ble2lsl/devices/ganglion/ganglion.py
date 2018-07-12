@@ -77,7 +77,7 @@ class PacketHandler(BasePacketHandler):
 
         self._last_eeg_data = np.zeros(self._chunks["EEG"].shape[0])
         self._chunks["messages"][0] = ""
-        self._sample_idxs["messages"][0] = -1
+        self._chunk_idxs["messages"] = -1
         self._sample_ids = streams_dict([-1] * len(STREAMS))
 
         if "accelerometer" in self._streamer.subscriptions:
@@ -107,12 +107,12 @@ class PacketHandler(BasePacketHandler):
         """Update last packet ID and dropped packets"""
         if self._sample_ids[name] == -1:
             self._sample_ids[name] = sample_id
-            self._sample_idxs[name][0] = 1
+            self._chunk_idxs[name] = 1
             return
         # sample IDs loops every 101 packets
-        self._sample_idxs[name][0] += sample_id - self._sample_ids[name]
+        self._chunk_idxs[name] += sample_id - self._sample_ids[name]
         if sample_id < self._sample_ids[name]:
-            self._sample_idxs[name][0] += ID_TURNOVER[name]
+            self._chunk_idxs[name] += ID_TURNOVER[name]
         self._sample_ids[name] = sample_id
 
         if name == "EEG":

@@ -64,10 +64,9 @@ class BaseStreamer:
         self._time_func = time_func
         self._stream_params = self._device.PARAMS['streams']
 
-        self._chunk_timestamps = empty_chunk_timestamps(self._stream_params,
-                                                        self._subscriptions)
-        self._current_chunks = empty_chunks(self._stream_params,
-                                            self._subscriptions)
+        self._chunk_idxs = stream_idxs_zeros(self._subscriptions)
+        self._chunks = empty_chunks(self._stream_params,
+                                    self._subscriptions)
 
     def start(self):
         """Begin streaming through the LSL outlet."""
@@ -93,11 +92,9 @@ class BaseStreamer:
                                                    chunk_size=chunk_size,
                                                    max_buffered=360)
 
-    def _push_chunk(self, name):
-        outlet = self._outlets[name]
-        for sample in range(self._stream_params["chunk_size"][name]):
-            outlet.push_sample(self._current_chunks[name][:, sample],
-                               self._chunk_timestamps[name][sample])
+    def _push_chunk(self, name, timestamp):
+        self._outlets[name].push_chunk(self._chunks[name].tolist(),
+                                       timestamp)
 
     def _add_device_info(self, name):
         """Adds device-specific parameters to `info`."""
@@ -170,6 +167,8 @@ class Streamer(BaseStreamer):
         self._internal_timestamps = {name: (internal_timestamps
                                             if nominal_srates[name] else True)
                                      for name in device.STREAMS}
+        self._start_time = stream_idxs_zeros(self._subscriptions)
+        self._first_chunk_idxs = stream_idxs_zeros(self._subscriptions)
 
         # initialize gatt adapter
         if backend == 'bgapi':
@@ -183,18 +182,16 @@ class Streamer(BaseStreamer):
         self._backend = backend
         self._scan_timeout = scan_timeout
 
-        self.initialize_timestamping()
         self._transmit_thread = threading.Thread(target=self._transmit_chunks)
 
         if autostart:
             self.connect()
             self.start()
 
-    def initialize_timestamping(self):
-        """Reset the parameters for timestamp generation."""
-        self._sample_idx = {name: 0 for name in self._subscriptions}
-        self._last_idx = {name: 0 for name in self._subscriptions}
-        self._start_time = self._time_func()
+    def _init_timestamp(self, name, chunk_idx):
+        """Set the starting timestamp and chunk index for a subscription."""
+        self._first_chunk_idxs[name] = chunk_idx
+        self._start_time[name] = self._time_func()
 
     def start(self):
         """Start streaming by writing to the send characteristic."""
@@ -282,34 +279,38 @@ class Streamer(BaseStreamer):
 
     def _transmit_chunks(self):
         """TODO: missing chunk vs. missing sample"""
+        # nominal duration of chunks for progressing non-internal timestamps
+        chunk_period = {name: (self._stream_params["chunk_size"][name]
+                               / self._stream_params["nominal_srate"][name])
+                        for name in self._subscriptions
+                        if not self._internal_timestamps[name]}
+        first_idx = self._first_chunk_idxs
         while True:
-            name, sample_idxs, chunk = self._transmit_queue.get()
-            self._current_chunks[name][:, :] = chunk
-            chunk_idx = sample_idxs[0]
-            if self._last_idx[name] == 0:
-                self._last_idx[name] = chunk_idx - 1
-            if not chunk_idx == self._last_idx[name] + 1:
-                print("Missing {} sample {} : {}".format(name, chunk_idx,
-                                                         self._last_idx[name]))
-            self._last_idx[name] = chunk_idx
-            sample_idxs = np.arange(self._stream_params["chunk_size"][name],
-                                    dtype=np.float32)
-            if self._internal_timestamps[name]:
-                sample_idxs += self._sample_idx[name]
-            self._sample_idx[name] += self._stream_params["chunk_size"][name]
+            name, chunk_idx, chunk = self._transmit_queue.get()
+            self._chunks[name][:, :] = chunk
 
-            # generate timestamps based on start time and nominal sample rate
-            nominal_srate = self._stream_params["nominal_srate"][name]
-            if nominal_srate:
-                timestamps = sample_idxs / nominal_srate
+            # update chunk index records and report missing chunks
+            # passing chunk_idx=-1 to the queue averts this (ex. status stream)
+            if not chunk_idx == -1:
+                if self._chunk_idxs[name] == 0:
+                    self._init_timestamp(name, chunk_idx)
+                    self._chunk_idxs[name] = chunk_idx - 1
+                if not chunk_idx == self._chunk_idxs[name] + 1:
+                    print("Missing {} chunk {}: {}"
+                          .format(name, chunk_idx, self._chunk_idxs[name]))
+                self._chunk_idxs[name] = chunk_idx
             else:
-                timestamps = sample_idxs * 0.0
+                # track number of received chunks for non-indexed streams
+                self._chunk_idxs[name] += 1
+
+            # generate timestamp; either internally or
             if self._internal_timestamps[name]:
-                timestamps += self._time_func()
+                timestamp = self._time_func()
             else:
-                timestamps += self._start_time
-            self._chunk_timestamps[name] = timestamps
-            self._push_chunk(name)
+                timestamp = chunk_period[name] * (chunk_idx - first_idx[name])
+                timestamp += self._start_time[name]
+
+            self._push_chunk(name, timestamp)
 
     @property
     def backend(self):
@@ -349,7 +350,7 @@ class Dummy(BaseStreamer):
         self._init_lsl_outlets()
 
         sfreqs = self._stream_params["nominal_srate"]
-        chunk_shapes = {name: self._current_chunks[name].shape
+        chunk_shapes = {name: self._chunks[name].shape
                         for name in self._subscriptions}
         self._delays = {name: 1 / (sfreqs[name] / chunk_shapes[name][1])
                         for name in self._subscriptions}
@@ -386,10 +387,10 @@ class Dummy(BaseStreamer):
     def _stream(self, name):
         """Run in thread to mimic periodic hardware input."""
         while self._proceed:
-            # print("cc: ", self._current_chunks[name])
+            # print("cc: ", self._chunks[name])
             # print("nc: ", next(self._get_chunk[name]))
-            self._current_chunks[name] = next(self._get_chunk[name])
-            self._chunk_timestamps[name][:] = time.time()
+            self._chunks[name] = next(self._get_chunk[name])
+            self._chunk_idxs[name][:] = time.time()
             self._push_chunk(name)
             time.sleep(self._delays[name])
 
@@ -399,18 +400,16 @@ class Dummy(BaseStreamer):
         TODO:
             * replaced when using an iterator
         """
-        self._current_chunks
+        self._chunks
         # TODO: more realistic timestamps
         timestamp = self._time_func()
         self._timestamps = np.array([timestamp]*self._chunk_size)
 
 
-def empty_chunk_timestamps(stream_params, subscriptions, dtype=np.float32):
-    """Initialize an empty timestamp array for each subscription."""
-    chunk_timestamps = {name: np.zeros(stream_params["chunk_size"][name],
-                                       dtype=dtype)
-                        for name in subscriptions}
-    return chunk_timestamps
+def stream_idxs_zeros(subscriptions):
+    """Initialize an integer index for each subscription."""
+    idxs = {name: 0 for name in subscriptions}
+    return idxs
 
 
 def empty_chunks(stream_params, subscriptions):
