@@ -16,6 +16,7 @@ Note:
 
 TODO:
     * dejitter_timestamps may be irrelevant depending on ble2lsl operation
+    * auto-acquire device if none given?
 
 .. _Lab Streaming Layer:
    https://github.com/sccn/labstreaminglayer
@@ -119,13 +120,6 @@ class Receiver:
                                                           label=info.name(),
                                                           **kwargs)
 
-            # aliases for `inlet.pull_chunk`
-            self._pull_chunk = {
-                name: lambda: inlet.pull_chunk(timeout=1.0,
-                                               max_samples=max_chunklen)
-                for name, inlet in self._inlets.items()
-            }
-
         self._dejitter = dejitter
         self._threads = {}
         self._new_threads()
@@ -163,9 +157,11 @@ class Receiver:
 
     def _receive(self, name):
         """Streaming thread."""
+        inlets = self._inlets
         try:
             while self._proceed:
-                samples, timestamps = self._pull_chunk[name]()
+                samples, timestamps = inlets[name].pull_chunk(timeout=0.1)
+                #print(name, samples, timestamps)
                 if timestamps:
                     if self._dejitter:
                         timestamps = self._dejitter_timestamps(name,

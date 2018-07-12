@@ -102,8 +102,8 @@ PACKET_FORMATS = streams_dict(['uint:16' + ',uint:12' * 12,
 """Byte formats of the incoming packets."""
 
 CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
-                              lambda data: 0.0000610352 * data.reshape((3, 3)).T,
-                              lambda data: 0.0074768 * data.reshape((3, 3)).T,
+                              lambda data: 0.0000610352 * data.reshape((3, 3)),
+                              lambda data: 0.0074768 * data.reshape((3, 3)),
                               lambda data: np.array([data[0] / 512,
                                                      2.2 * data[1],
                                                      data[2], data[3]]).reshape((4, 1)),
@@ -121,8 +121,9 @@ class PacketHandler(BasePacketHandler):
     def __init__(self, streamer, **kwargs):
         super().__init__(PARAMS["streams"], streamer, **kwargs)
 
-        self._chunks["status"][0] = ""
-        self._chunk_idxs["status"] = -1
+        if "status" in self._streamer.subscriptions:
+            self._chunks["status"][0] = ""
+            self._chunk_idxs["status"] = -1
 
     def process_packet(self, handle, packet):
         """Unpack, convert, and return packet contents."""
@@ -140,7 +141,7 @@ class PacketHandler(BasePacketHandler):
 
             if name == "EEG":
                 idx = EEG_HANDLE_CH_IDXS[handle]
-                self._chunks[name][idx] = CONVERT_FUNCS[name](data)
+                self._chunks[name][:, idx] = CONVERT_FUNCS[name](data)
                 if not handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
                     return
             else:

@@ -61,10 +61,12 @@ PARAMS = dict(
 """OpenBCI Ganglion LSL- and BLE-related parameters."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
-CONVERT_FUNCS = streams_dict([lambda x: x * 1200 / (8388607.0 * 1.5 * 51.0),
-                              lambda x: 0.016 * x,
-                              lambda x: x,  # not used (messages)
-                              ])
+SCALE_FACTOR = streams_dict([1.2 / (8388608.0 * 1.5 * 51.0),
+                             0.016,
+                             1  # not used (messages)
+                             ])
+"""Scale factors for conversion of EEG and accelerometer data to mV."""
+
 ID_TURNOVER = streams_dict([201, 10])
 """The number of samples processed before the packet ID cycles back to zero."""
 
@@ -75,10 +77,14 @@ class PacketHandler(BasePacketHandler):
     def __init__(self, streamer, **kwargs):
         super().__init__(PARAMS["streams"], streamer, **kwargs)
 
-        self._last_eeg_data = np.zeros(self._chunks["EEG"].shape[0])
-        self._chunks["messages"][0] = ""
-        self._chunk_idxs["messages"] = -1
         self._sample_ids = streams_dict([-1] * len(STREAMS))
+
+        if "EEG" in self._streamer.subscriptions:
+            self._last_eeg_data = np.zeros(self._chunks["EEG"].shape[1])
+
+        if "messages" in self._streamer.subscriptions:
+            self._chunks["messages"][0] = ""
+            self._chunk_idxs["messages"] = -1
 
         if "accelerometer" in self._streamer.subscriptions:
             # queue accelerometer_on command
@@ -116,8 +122,8 @@ class PacketHandler(BasePacketHandler):
         self._sample_ids[name] = sample_id
 
         if name == "EEG":
-            self._chunks[name][:, -1] = np.copy(self._last_eeg_data)
-        self._chunks[name] = CONVERT_FUNCS[name](self._chunks[name])
+            self._chunks[name][0, :] = np.copy(self._last_eeg_data)
+        self._chunks[name] *= SCALE_FACTOR[name]
         self._enqueue_chunk(name)
 
     def _unknown_packet_warning(self, start_byte, packet):
@@ -126,10 +132,11 @@ class PacketHandler(BasePacketHandler):
 
     def _parse_message(self, start_byte, packet):
         """Parse a partial ASCII message."""
-        self._chunks["messages"] += str(packet)
-        if start_byte == 207:
-            self._enqueue_chunk("messages")
-            self._chunks["messages"][0] = ""
+        if "messages" in self._streamer.subscriptions:
+            self._chunks["messages"] += str(packet)
+            if start_byte == 207:
+                self._enqueue_chunk("messages")
+                self._chunks["messages"][0] = ""
 
     def _parse_uncompressed(self, packet_id, packet):
         """Parse a raw uncompressed packet."""
@@ -146,7 +153,7 @@ class PacketHandler(BasePacketHandler):
             # convert from packet to sample ID
             sample_id = (packet_id - 1) * 2 + delta_id + 1
             # 19bit packets hold deltas between two samples
-            self._last_eeg_data -= deltas[delta_id, :]
+            self._last_eeg_data += np.array(deltas[delta_id])
             self._update_counts_and_enqueue("EEG", sample_id)
 
     def _parse_compressed_19bit(self, packet_id, packet):
@@ -167,7 +174,8 @@ class PacketHandler(BasePacketHandler):
         # set appropriate accelerometer byte
         id_ones = packet_id % 10 - 1
         if id_ones in [0, 1, 2]:
-            self._chunks["accelerometer"][id_ones] = int8_from_byte(packet[18])
+            value = int8_from_byte(packet[18])
+            self._chunks["accelerometer"][0, id_ones] = value
             if id_ones == 2:
                 self._update_counts_and_enqueue("accelerometer",
                                                 packet_id // 10)
@@ -193,172 +201,210 @@ class PacketHandler(BasePacketHandler):
         self.push_sample(packet_id - 200, self._data,
                          self.last_accelerometer, self.last_impedance)
 
-
 def int_from_24bits(unpacked):
-    """Convert 24-bit data coded on 3 bytes to a proper integer."""
-    if bad_data_size(unpacked, 3, "3-byte buffer"):
-        raise ValueError("Bad input size for byte conversion.")
+  """ Convert 24bit data coded on 3 bytes to a proper integer """
+  if len(unpacked) != 3:
+    raise ValueError("Input should be 3 bytes long.")
 
-    # FIXME: quick'n dirty, unpack wants strings later on
-    int_bytes = INT_SIGN_BYTE[unpacked[0] > 127] + struct.pack('3B', *unpacked)
+  # FIXME: quick'n dirty, unpack wants strings later on
+  literal_read = struct.pack('3B', unpacked[0], unpacked[1], unpacked[2])
 
-    # unpack little endian(>) signed integer(i) (-> platform independent)
-    int_unpacked = struct.unpack('>i', int_bytes)[0]
+  #3byte int in 2s compliment
+  if (unpacked[0] > 127):
+    pre_fix = bytes(bytearray.fromhex('FF'))
+  else:
+    pre_fix = bytes(bytearray.fromhex('00'))
 
-    return int_unpacked
+  literal_read = pre_fix + literal_read;
 
+  #unpack little endian(>) signed integer(i) (makes unpacking platform independent)
+  myInt = struct.unpack('>i', literal_read)[0]
 
-def int32_from_19bit(three_byte_buffer):
-    """Convert 19-bit data coded on 3 bytes to a proper integer."""
-    if bad_data_size(three_byte_buffer, 3, "3-byte buffer"):
-        raise ValueError("Bad input size for byte conversion.")
+  return myInt
 
-    # if LSB is 1, negative number
-    if three_byte_buffer[2] & 0x01 > 0:
-        prefix = 0b1111111111111
-        int32 = ((prefix << 19) | (three_byte_buffer[0] << 16)
-                 | (three_byte_buffer[1] << 8) | three_byte_buffer[2]) \
-                | ~0xFFFFFFFF
-    else:
-        prefix = 0
-        int32 = (prefix << 19) | (three_byte_buffer[0] << 16) \
-                | (three_byte_buffer[1] << 8) | three_byte_buffer[2]
+def int32_from_19bit(threeByteBuffer):
+  """ Convert 19bit data coded on 3 bytes to a proper integer (LSB bit 1 used as sign). """
+  if len(threeByteBuffer) != 3:
+    raise ValueError("Input should be 3 bytes long.")
 
-    return int32
+  prefix = 0;
 
+  # if LSB is 1, negative number, some hasty unsigned to signed conversion to do
+  if threeByteBuffer[2] & 0x01 > 0:
+    prefix = 0b1111111111111;
+    return ((prefix << 19) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]) | ~0xFFFFFFFF
+  else:
+    return (prefix << 19) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]
 
-def int32_from_18bit(three_byte_buffer):
-    """Convert 18-bit data coded on 3 bytes to a proper integer."""
-    if bad_data_size(three_byte_buffer, 3, "3-byte buffer"):
-        raise ValueError("Bad input size for byte conversion.")
+def int32_from_18bit(threeByteBuffer):
+  """ Convert 18bit data coded on 3 bytes to a proper integer (LSB bit 1 used as sign) """
+  if len(threeByteBuffer) != 3:
+    raise Valuerror("Input should be 3 bytes long.")
 
-    # if LSB is 1, negative number, some hasty unsigned to signed conversion to do
-    if three_byte_buffer[2] & 0x01 > 0:
-        prefix = 0b11111111111111
-        int32 = ((prefix << 18) | (three_byte_buffer[0] << 16)
-                 | (three_byte_buffer[1] << 8) | three_byte_buffer[2]) \
-                | ~0xFFFFFFFF
-    else:
-        prefix = 0
-        int32 = (prefix << 18) | (three_byte_buffer[0] << 16) \
-                | (three_byte_buffer[1] << 8) | three_byte_buffer[2]
+  prefix = 0;
 
-    return int32
-
+  # if LSB is 1, negative number, some hasty unsigned to signed conversion to do
+  if threeByteBuffer[2] & 0x01 > 0:
+    prefix = 0b11111111111111;
+    return ((prefix << 18) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]) | ~0xFFFFFFFF
+  else:
+    return (prefix << 18) | (threeByteBuffer[0] << 16) | (threeByteBuffer[1] << 8) | threeByteBuffer[2]
 
 def int8_from_byte(byte):
-    """Convert one byte to signed integer."""
-    if byte > 127:
-        return (256 - byte) * (-1)
-    else:
-        return byte
+  """ Convert one byte to signed value """
 
+  if byte > 127:
+    return (256-byte) * (-1)
+  else:
+    return byte
 
 def decompress_deltas_19bit(buffer):
-    """Parse packet deltas from 19-bit compression format."""
-    if bad_data_size(buffer, 19, "19-byte compressed packet"):
-        raise ValueError("Bad input size for byte conversion.")
+  """
+  Called to when a compressed packet is received.
+  buffer: Just the data portion of the sample. So 19 bytes.
+  return {Array} - An array of deltas of shape 2x4 (2 samples per packet and 4 channels per sample.)
+  """
+  if len(buffer) != 19:
+    raise ValueError("Input should be 19 bytes long.")
 
-    deltas = np.zeros((2, 4))
+  receivedDeltas = [[0, 0, 0, 0],[0, 0, 0, 0]]
 
-    # Sample 1 - Channel 1
-    minibuf = [(buffer[0] >> 5),
-               ((buffer[0] & 0x1F) << 3 & 0xFF) | (buffer[1] >> 5),
-               ((buffer[1] & 0x1F) << 3 & 0xFF) | (buffer[2] >> 5)]
-    deltas[0][0] = int32_from_19bit(minibuf)
+  # Sample 1 - Channel 1
+  miniBuf = [
+      (buffer[0] >> 5),
+      ((buffer[0] & 0x1F) << 3 & 0xFF) | (buffer[1] >> 5),
+      ((buffer[1] & 0x1F) << 3 & 0xFF) | (buffer[2] >> 5)
+    ]
 
-    # Sample 1 - Channel 2
-    minibuf = [(buffer[2] & 0x1F) >> 2,
-               (buffer[2] << 6 & 0xFF) | (buffer[3] >> 2),
-               (buffer[3] << 6 & 0xFF) | (buffer[4] >> 2)]
-    deltas[0][1] = int32_from_19bit(minibuf)
+  receivedDeltas[0][0] = int32_from_19bit(miniBuf)
 
-    # Sample 1 - Channel 3
-    minibuf = [((buffer[4] & 0x03) << 1 & 0xFF) | (buffer[5] >> 7),
-               ((buffer[5] & 0x7F) << 1 & 0xFF) | (buffer[6] >> 7),
-               ((buffer[6] & 0x7F) << 1 & 0xFF) | (buffer[7] >> 7)]
-    deltas[0][2] = int32_from_19bit(minibuf)
+  # Sample 1 - Channel 2
+  miniBuf = [
+      (buffer[2] & 0x1F) >> 2,
+      (buffer[2] << 6 & 0xFF) | (buffer[3] >> 2),
+      (buffer[3] << 6 & 0xFF) | (buffer[4] >> 2)
+    ]
+  receivedDeltas[0][1] = int32_from_19bit(miniBuf)
 
-    # Sample 1 - Channel 4
-    minibuf = [((buffer[7] & 0x7F) >> 4),
-               ((buffer[7] & 0x0F) << 4 & 0xFF) | (buffer[8] >> 4),
-               ((buffer[8] & 0x0F) << 4 & 0xFF) | (buffer[9] >> 4)]
-    deltas[0][3] = int32_from_19bit(minibuf)
+  # Sample 1 - Channel 3
+  miniBuf = [
+      ((buffer[4] & 0x03) << 1 & 0xFF) | (buffer[5] >> 7),
+      ((buffer[5] & 0x7F) << 1 & 0xFF) | (buffer[6] >> 7),
+      ((buffer[6] & 0x7F) << 1 & 0xFF) | (buffer[7] >> 7)
+    ]
+  receivedDeltas[0][2] = int32_from_19bit(miniBuf)
 
-    # Sample 2 - Channel 1
-    minibuf = [((buffer[9] & 0x0F) >> 1),
-               (buffer[9] << 7 & 0xFF) | (buffer[10] >> 1),
-               (buffer[10] << 7 & 0xFF) | (buffer[11] >> 1)]
-    deltas[1][0] = int32_from_19bit(minibuf)
+  # Sample 1 - Channel 4
+  miniBuf = [
+      ((buffer[7] & 0x7F) >> 4),
+      ((buffer[7] & 0x0F) << 4 & 0xFF) | (buffer[8] >> 4),
+      ((buffer[8] & 0x0F) << 4 & 0xFF) | (buffer[9] >> 4)
+    ]
+  receivedDeltas[0][3] = int32_from_19bit(miniBuf)
 
-    # Sample 2 - Channel 2
-    minibuf = [((buffer[11] & 0x01) << 2 & 0xFF) | (buffer[12] >> 6),
-               (buffer[12] << 2 & 0xFF) | (buffer[13] >> 6),
-               (buffer[13] << 2 & 0xFF) | (buffer[14] >> 6)]
-    deltas[1][1] = int32_from_19bit(minibuf)
+  # Sample 2 - Channel 1
+  miniBuf = [
+      ((buffer[9] & 0x0F) >> 1),
+      (buffer[9] << 7 & 0xFF) | (buffer[10] >> 1),
+      (buffer[10] << 7 & 0xFF) | (buffer[11] >> 1)
+    ]
+  receivedDeltas[1][0] = int32_from_19bit(miniBuf)
 
-    # Sample 2 - Channel 3
-    minibuf = [((buffer[14] & 0x38) >> 3),
-               ((buffer[14] & 0x07) << 5 & 0xFF) | ((buffer[15] & 0xF8) >> 3),
-               ((buffer[15] & 0x07) << 5 & 0xFF) | ((buffer[16] & 0xF8) >> 3)]
-    deltas[1][2] = int32_from_19bit(minibuf)
+  # Sample 2 - Channel 2
+  miniBuf = [
+      ((buffer[11] & 0x01) << 2 & 0xFF) | (buffer[12] >> 6),
+      (buffer[12] << 2 & 0xFF) | (buffer[13] >> 6),
+      (buffer[13] << 2 & 0xFF) | (buffer[14] >> 6)
+    ]
+  receivedDeltas[1][1] = int32_from_19bit(miniBuf)
 
-    # Sample 2 - Channel 4
-    minibuf = [(buffer[16] & 0x07), buffer[17], buffer[18]]
-    deltas[1][3] = int32_from_19bit(minibuf)
+  # Sample 2 - Channel 3
+  miniBuf = [
+      ((buffer[14] & 0x38) >> 3),
+      ((buffer[14] & 0x07) << 5 & 0xFF) | ((buffer[15] & 0xF8) >> 3),
+      ((buffer[15] & 0x07) << 5 & 0xFF) | ((buffer[16] & 0xF8) >> 3)
+    ]
+  receivedDeltas[1][2] = int32_from_19bit(miniBuf)
 
-    return deltas
+  # Sample 2 - Channel 4
+  miniBuf = [(buffer[16] & 0x07), buffer[17], buffer[18]]
+  receivedDeltas[1][3] = int32_from_19bit(miniBuf)
 
+  return receivedDeltas;
 
 def decompress_deltas_18bit(buffer):
-    """Parse packet deltas from 18-byte compression format."""
-    if bad_data_size(buffer, 18, "18-byte compressed packet"):
-        raise ValueError("Bad input size for byte conversion.")
+  """
+  Called to when a compressed packet is received.
+  buffer: Just the data portion of the sample. So 19 bytes.
+  return {Array} - An array of deltas of shape 2x4 (2 samples per packet and 4 channels per sample.)
+  """
+  if len(buffer) != 18:
+    raise ValueError("Input should be 18 bytes long.")
 
-    deltas = np.zeros((2, 4))
+  receivedDeltas = [[0, 0, 0, 0],[0, 0, 0, 0]]
 
-    # Sample 1 - Channel 1
-    minibuf = [(buffer[0] >> 6),
-               ((buffer[0] & 0x3F) << 2 & 0xFF) | (buffer[1] >> 6),
-               ((buffer[1] & 0x3F) << 2 & 0xFF) | (buffer[2] >> 6)]
-    deltas[0][0] = int32_from_18bit(minibuf)
+  # Sample 1 - Channel 1
+  miniBuf = [
+      (buffer[0] >> 6),
+      ((buffer[0] & 0x3F) << 2 & 0xFF) | (buffer[1] >> 6),
+      ((buffer[1] & 0x3F) << 2 & 0xFF) | (buffer[2] >> 6)
+    ]
+  receivedDeltas[0][0] = int32_from_18bit(miniBuf);
 
-    # Sample 1 - Channel 2
-    minibuf = [(buffer[2] & 0x3F) >> 4,
-               (buffer[2] << 4 & 0xFF) | (buffer[3] >> 4),
-               (buffer[3] << 4 & 0xFF) | (buffer[4] >> 4)]
-    deltas[0][1] = int32_from_18bit(minibuf)
+  # Sample 1 - Channel 2
+  miniBuf = [
+      (buffer[2] & 0x3F) >> 4,
+      (buffer[2] << 4 & 0xFF) | (buffer[3] >> 4),
+      (buffer[3] << 4 & 0xFF) | (buffer[4] >> 4)
+    ]
+  receivedDeltas[0][1] = int32_from_18bit(miniBuf);
 
-    # Sample 1 - Channel 3
-    minibuf = [(buffer[4] & 0x0F) >> 2,
-               (buffer[4] << 6 & 0xFF) | (buffer[5] >> 2),
-               (buffer[5] << 6 & 0xFF) | (buffer[6] >> 2)]
-    deltas[0][2] = int32_from_18bit(minibuf)
+  # Sample 1 - Channel 3
+  miniBuf = [
+      (buffer[4] & 0x0F) >> 2,
+      (buffer[4] << 6 & 0xFF) | (buffer[5] >> 2),
+      (buffer[5] << 6 & 0xFF) | (buffer[6] >> 2)
+    ]
+  receivedDeltas[0][2] = int32_from_18bit(miniBuf);
 
-    # Sample 1 - Channel 4
-    minibuf = [(buffer[6] & 0x03), buffer[7], buffer[8]]
-    deltas[0][3] = int32_from_18bit(minibuf)
+  # Sample 1 - Channel 4
+  miniBuf = [
+      (buffer[6] & 0x03),
+      buffer[7],
+      buffer[8]
+    ]
+  receivedDeltas[0][3] = int32_from_18bit(miniBuf);
 
-    # Sample 2 - Channel 1
-    minibuf = [(buffer[9] >> 6),
-               ((buffer[9] & 0x3F) << 2 & 0xFF) | (buffer[10] >> 6),
-               ((buffer[10] & 0x3F) << 2 & 0xFF) | (buffer[11] >> 6)]
-    deltas[1][0] = int32_from_18bit(minibuf)
+  # Sample 2 - Channel 1
+  miniBuf = [
+      (buffer[9] >> 6),
+      ((buffer[9] & 0x3F) << 2 & 0xFF) | (buffer[10] >> 6),
+      ((buffer[10] & 0x3F) << 2 & 0xFF) | (buffer[11] >> 6)
+    ]
+  receivedDeltas[1][0] = int32_from_18bit(miniBuf);
 
-    # Sample 2 - Channel 2
-    minibuf = [(buffer[11] & 0x3F) >> 4,
-               (buffer[11] << 4 & 0xFF) | (buffer[12] >> 4),
-               (buffer[12] << 4 & 0xFF) | (buffer[13] >> 4)]
-    deltas[1][1] = int32_from_18bit(minibuf)
+  # Sample 2 - Channel 2
+  miniBuf = [
+      (buffer[11] & 0x3F) >> 4,
+      (buffer[11] << 4 & 0xFF) | (buffer[12] >> 4),
+      (buffer[12] << 4 & 0xFF) | (buffer[13] >> 4)
+    ]
+  receivedDeltas[1][1] = int32_from_18bit(miniBuf);
 
-    # Sample 2 - Channel 3
-    minibuf = [(buffer[13] & 0x0F) >> 2,
-               (buffer[13] << 6 & 0xFF) | (buffer[14] >> 2),
-               (buffer[14] << 6 & 0xFF) | (buffer[15] >> 2)]
-    deltas[1][2] = int32_from_18bit(minibuf)
+  # Sample 2 - Channel 3
+  miniBuf = [
+      (buffer[13] & 0x0F) >> 2,
+      (buffer[13] << 6 & 0xFF) | (buffer[14] >> 2),
+      (buffer[14] << 6 & 0xFF) | (buffer[15] >> 2)
+    ]
+  receivedDeltas[1][2] = int32_from_18bit(miniBuf);
 
-    # Sample 2 - Channel 4
-    minibuf = [(buffer[15] & 0x03), buffer[16], buffer[17]]
-    deltas[1][3] = int32_from_18bit(minibuf)
+  # Sample 2 - Channel 4
+  miniBuf = [
+      (buffer[15] & 0x03),
+      buffer[16],
+      buffer[17]
+    ]
+  receivedDeltas[1][3] = int32_from_18bit(miniBuf);
 
-    return deltas
+  return receivedDeltas;

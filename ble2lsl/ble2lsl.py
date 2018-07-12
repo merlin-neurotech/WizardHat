@@ -68,6 +68,15 @@ class BaseStreamer:
         self._chunks = empty_chunks(self._stream_params,
                                     self._subscriptions)
 
+        # StreamOutlet.push_chunk doesn't like single-sample chunks...
+        # but want to keep using push_chunk for intra-chunk timestamps
+        # doing this beforehand to avoid a chunk size check for each push
+        chunk_size = self._stream_params["chunk_size"]
+        self._push_func = {name: (self._push_chunk_as_sample
+                                  if chunk_size[name] == 1
+                                  else self._push_chunk)
+                           for name in self._subscriptions}
+
     def start(self):
         """Begin streaming through the LSL outlet."""
         raise NotImplementedError()
@@ -95,6 +104,10 @@ class BaseStreamer:
     def _push_chunk(self, name, timestamp):
         self._outlets[name].push_chunk(self._chunks[name].tolist(),
                                        timestamp)
+
+    def _push_chunk_as_sample(self, name, timestamp):
+        self._outlets[name].push_sample(self._chunks[name].tolist()[0],
+                                        timestamp)
 
     def _add_device_info(self, name):
         """Adds device-specific parameters to `info`."""
@@ -310,7 +323,7 @@ class Streamer(BaseStreamer):
                 timestamp = chunk_period[name] * (chunk_idx - first_idx[name])
                 timestamp += self._start_time[name]
 
-            self._push_chunk(name, timestamp)
+            self._push_func[name](name, timestamp)
 
     @property
     def backend(self):
@@ -390,8 +403,8 @@ class Dummy(BaseStreamer):
             # print("cc: ", self._chunks[name])
             # print("nc: ", next(self._get_chunk[name]))
             self._chunks[name] = next(self._get_chunk[name])
-            self._chunk_idxs[name][:] = time.time()
-            self._push_chunk(name)
+            timestamp = time.time()
+            self._push_func[name](name, timestamp)
             time.sleep(self._delays[name])
 
     def make_chunk(self, chunk_ind):
@@ -414,8 +427,8 @@ def stream_idxs_zeros(subscriptions):
 
 def empty_chunks(stream_params, subscriptions):
     """Initialize an empty chunk array for each subscription."""
-    chunks = {name: np.zeros((stream_params["channel_count"][name],
-                              stream_params["chunk_size"][name]),
+    chunks = {name: np.zeros((stream_params["chunk_size"][name],
+                              stream_params["channel_count"][name]),
                              dtype=stream_params["numpy_dtype"][name])
               for name in subscriptions}
     return chunks
@@ -428,11 +441,12 @@ class NoisySinusoids:
         self._chunk_shape = chunk_shape
         self._ang_freqs = 2 * np.pi * np.array(freqs)
         self._speriod = 1 / sfreq
-        self._chunk_t_incr = (1 + chunk_shape[1]) / sfreq
+        self._chunk_t_incr = (1 + chunk_shape[0]) / sfreq
         self._freq_amps = np.random.randint(1, 5, len(freqs))
 
     def __iter__(self):
-        self._t = np.arange(self._chunk_shape[1]) * self._speriod
+        self._t = (np.arange(self._chunk_shape[0]).reshape((-1, 1))
+                   * self._speriod)
         return self
 
     def __next__(self):
