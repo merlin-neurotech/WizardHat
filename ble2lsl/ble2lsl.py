@@ -10,9 +10,6 @@ All classes streaming data through an LSL outlet should subclass
 Also includes dummy streamer objects, which do not acquire data over BLE but
 pass local data through an LSL outlet, e.g. for testing.
 
-TODO:
-    * Documentation for both BLE backends.
-
 .. _Generic Attribute Profile:
    https://www.bluetooth.com/specifications/gatt/generic-attributes-overview
 
@@ -42,9 +39,9 @@ class BaseStreamer:
 
     Subclasses must implement `start` and `stop` methods for stream control.
 
-    Attributes:
-        info (pylsl.StreamInfo): Contains information about the stream.
-        outlet (pylsl.StreamOutlet): LSL outlet to which data is pushed.
+    TODO:
+        * Public access to outlets and stream info?
+        * Push chunks, not samples (have to generate intra-chunk timestamps anyway)
     """
 
     def __init__(self, device, subscriptions=None, time_func=time.time):
@@ -63,7 +60,7 @@ class BaseStreamer:
                 subscriptions = device.DEFAULT_SUBSCRIPTIONS
             except AttributeError:
                 subscriptions = device.STREAMS
-        self._subscriptions = subscriptions
+        self._subscriptions = tuple(subscriptions)
         self._time_func = time_func
         self._stream_params = self._device.PARAMS['streams']
 
@@ -122,17 +119,18 @@ class BaseStreamer:
         except KeyError:
             raise ValueError("Channel names, units, or types not specified")
 
+    @property
+    def subscriptions(self):
+        """The names of the subscribed streams."""
+        return self._subscriptions
+
 
 class Streamer(BaseStreamer):
     """Streams data to an LSL outlet from a BLE device.
 
-    Attributes:
-        address (str): Device-specific (MAC) address.
-        start_time (float): Time of timestamp initialization by `initialize`.
-            Provided by `time_func`.
-
     TODO:
-        * Multiple devices with same name
+        * Try built-in LSL features for intra-chunk timestamps (StreamOutlet)
+        * initialize_timestamping: should indices be reset to 0 mid-streaming?
     """
 
     def __init__(self, device, address=None, backend='bgapi', interface=None,
@@ -176,7 +174,7 @@ class Streamer(BaseStreamer):
         # initialize gatt adapter
         if backend == 'bgapi':
             self._adapter = pygatt.BGAPIBackend(serial_port=interface)
-        elif backend == 'gatt':
+        elif backend in ['gatt', 'bluez']:
             # only works on Linux
             interface = self.interface or 'hci0'
             self._adapter = pygatt.GATTToolBackend(interface)
@@ -196,7 +194,7 @@ class Streamer(BaseStreamer):
         """Reset the parameters for timestamp generation."""
         self._sample_idx = {name: 0 for name in self._subscriptions}
         self._last_idx = {name: 0 for name in self._subscriptions}
-        self.start_time = self._time_func()
+        self._start_time = self._time_func()
 
     def start(self):
         """Start streaming by writing to the send characteristic."""
@@ -309,13 +307,13 @@ class Streamer(BaseStreamer):
             if self._internal_timestamps[name]:
                 timestamps += self._time_func()
             else:
-                timestamps += self.start_time
+                timestamps += self._start_time
             self._chunk_timestamps[name] = timestamps
             self._push_chunk(name)
 
     @property
     def backend(self):
-        """The `pygatt` backend used by the instance."""
+        """The name of the `pygatt` backend used by the instance."""
         return self._backend
 
     @property
@@ -323,14 +321,9 @@ class Streamer(BaseStreamer):
         """The MAC address of the device."""
         return self._address
 
-    @property
-    def subscriptions(self):
-        """The names of the subscribed streams."""
-        return self._subscriptions
-
 
 class Dummy(BaseStreamer):
-    """Streams data over an LSL outlet from a local source.
+    """Mimicks a device and pushes local data into an LSL outlet.
 
     Attributes:
         csv_file (str): Filename of `.csv` containing local data.
@@ -340,69 +333,65 @@ class Dummy(BaseStreamer):
         * implement CSV file streaming
     """
 
-    def __init__(self, device, dur=60, csv_file=None, autostart=True,
-                 **kwargs):
+    def __init__(self, device, chunk_iterator=None, csv_file=None,
+                 autostart=True, **kwargs):
         """Construct a `Dummy` instance.
 
-        Attributes:
+        Args:
             device: BLE device to impersonate (i.e. from `ble2lsl.devices`).
-            dur (float): Duration of random data to generate and stream.
-                The generated data is streamed on a loop.
+            chunk_iterator (generator): Class that iterates through chunks.
             csv_file (str): CSV file containing pre-generated data to stream.
             autostart (bool): Whether to start streaming on instantiation.
         """
-
         BaseStreamer.__init__(self, device=device, **kwargs)
 
-        self._address = None
-        self._init_lsl_outlet()
-        self._thread = threading.Thread(target=self._stream)
+        self._address = "DUMMY"
+        self._init_lsl_outlets()
+
+        sfreqs = self._stream_params["nominal_srate"]
+        chunk_shapes = {name: self._current_chunks[name].shape
+                        for name in self._subscriptions}
+        self._delays = {name: 1 / (sfreqs[name] / chunk_shapes[name][1])
+                        for name in self._subscriptions}
 
         # generate or load fake data
         if csv_file is None:
-            self._sfreq = device.LSL_INFO['nominal_srate']
-            self._n_chan = device.LSL_INFO['channel_count']
-            self._dummy_data = self.gen_dummy_data(dur)
+            if chunk_iterator is None:
+                chunk_iterator = NoisySinusoids
+            self._get_chunk = {name: iter(chunk_iterator(chunk_shapes[name],
+                                                         sfreqs[name]))
+                               for name in self._subscriptions}
         else:
-            self.csv_file = csv_file
-            # TODO: load csv file to np array
+            raise NotImplementedError("CSV file loading not yet available")
+            # self._csv_file = csv_file
 
-        self._proceed = True
+        # threads to mimic incoming BLE data
+        self._threads = {name: threading.Thread(target=self._stream,
+                                                kwargs=dict(name=name))
+                         for name in self._subscriptions}
+
         if autostart:
-            self._thread.start()
+            self.start()
 
-    def _stream(self):
+    def start(self):
+        """Start pushing data into the LSL outlet."""
+        self._proceed = True
+        for name in self._subscriptions:
+            self._threads[name].start()
+
+    def stop(self):
+        """Stop pushing data. Restart requires a new `Dummy` instance."""
+        self._proceed = False
+
+    def _stream(self, name):
         """Run in thread to mimic periodic hardware input."""
-        sec_per_chunk = 1 / (self._sfreq / self._chunk_size)
         while self._proceed:
-            self.start_time = self._time_func()
-            chunk_inds = np.arange(0, len(self._dummy_data.T),
-                                   self._chunk_size)
-            for chunk_ind in chunk_inds:
-                self.make_chunk(chunk_ind)
-                self._push_chunk(self._current_chunks, self._timestamps)
-                # force sampling rate
-                time.sleep(sec_per_chunk)
-
-    def gen_dummy_data(self, dur, freqs=[5, 10, 12, 20]):
-        """Generate noisy sinusoidal dummy samples.
-
-        TODO:
-            * becomes external when passing an iterator to `Dummy`
-        """
-        n_samples = dur * self._sfreq
-        x = np.arange(0, n_samples)
-        a_freqs = 2 * np.pi * np.array(freqs)
-        y = np.zeros((self._n_chan, len(x)))
-
-        # sum frequencies with random amplitudes
-        for freq in a_freqs:
-            y += np.random.randint(1, 5) * np.sin(freq * x)
-
-        noise = np.random.normal(0, 1, (self._n_chan, n_samples))
-        dummy_data = y + noise
-
-        return dummy_data
+            # print("cc: ", self._current_chunks[name])
+            # print("nc: ", next(self._get_chunk[name]))
+            self._current_chunks[name] = next(self._get_chunk[name])
+            self._chunk_timestamps[name][:] = time.time()
+            self._push_chunk(name)
+            time.sleep(self._delays[name])
 
     def make_chunk(self, chunk_ind):
         """Prepare a chunk from the totality of local data.
@@ -410,7 +399,7 @@ class Dummy(BaseStreamer):
         TODO:
             * replaced when using an iterator
         """
-        self._current_chunks = self._dummy_data[:, chunk_ind:chunk_ind+self._chunk_size]
+        self._current_chunks
         # TODO: more realistic timestamps
         timestamp = self._time_func()
         self._timestamps = np.array([timestamp]*self._chunk_size)
@@ -418,7 +407,7 @@ class Dummy(BaseStreamer):
 
 def empty_chunk_timestamps(stream_params, subscriptions, dtype=np.float32):
     """Initialize an empty timestamp array for each subscription."""
-    chunk_timestamps = {name: np.zeros(stream_params["channel_count"][name],
+    chunk_timestamps = {name: np.zeros(stream_params["chunk_size"][name],
                                        dtype=dtype)
                         for name in subscriptions}
     return chunk_timestamps
@@ -431,3 +420,30 @@ def empty_chunks(stream_params, subscriptions):
                              dtype=stream_params["numpy_dtype"][name])
               for name in subscriptions}
     return chunks
+
+
+class NoisySinusoids:
+    """Iterator class to provide noisy sinusoidal chunks of data."""
+
+    def __init__(self, chunk_shape, sfreq, freqs=[5, 10, 12, 20]):
+        self._chunk_shape = chunk_shape
+        self._ang_freqs = 2 * np.pi * np.array(freqs)
+        self._speriod = 1 / sfreq
+        self._chunk_t_incr = (1 + chunk_shape[1]) / sfreq
+        self._freq_amps = np.random.randint(1, 5, len(freqs))
+
+    def __iter__(self):
+        self._t = np.arange(self._chunk_shape[1]) * self._speriod
+        return self
+
+    def __next__(self):
+        # start with noise
+        chunk = np.random.normal(0, 1, self._chunk_shape)
+
+        # sum frequencies with random amplitudes
+        for i, freq in enumerate(self._ang_freqs):
+            chunk += self._freq_amps[i] * np.sin(freq * self._t)
+
+        self._t += self._chunk_t_incr
+
+        return chunk

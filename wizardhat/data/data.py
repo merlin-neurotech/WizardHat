@@ -5,6 +5,9 @@ All instantiable classes in this module are subclasses of the abstract class
 no constraints on the structure of the stored data. Thus, storage in any kind
 of data structure may be implemented in a subclass, so long as the appropriate
 interface methods are defined in that subclass.
+
+TODO:
+    * Support for commonly-used data formats; HDF5 for longer recordings. XDF?
 """
 
 import wizardhat.utils as utils

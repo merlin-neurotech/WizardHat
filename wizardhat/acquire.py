@@ -25,7 +25,6 @@ from wizardhat import data
 
 from serial.serialutil import SerialException
 import threading
-import time
 
 import numpy as np
 import pylsl as lsl
@@ -106,10 +105,10 @@ class Receiver:
             self.n_chan[name] = info.channel_count()
             self.ch_names[name] = get_ch_names(info)
             if '' in self.ch_names[name]:
-                print("Empty channel name(s) in {} stream info"\
+                print("Empty channel name(s) in {} stream info"
                       .format(name))
             if not len(self.ch_names[name]) == len(set(self.ch_names[name])):
-                print("Duplicate channel names in {} stream info"\
+                print("Duplicate channel names in {} stream info"
                       .format(name))
 
             # instantiate the `data.TimeSeries` instances
@@ -146,14 +145,13 @@ class Receiver:
         TODO:
             * TimeSeries effects (e.g. warn about discontinuity on restart)
         """
-        self._proceed = True
         try:
             for name in self._inlets:
                 self._threads[name].start()
         except RuntimeError:
             for name in self._inlets:
                 if self._thread.ident:
-                    # thread exists but has stopped; create and start a new thread
+                    # thread exists but has stopped; create and start new one
                     self._new_threads([name])
                     self._threads[name].start()
                 else:
@@ -273,6 +271,10 @@ def get_lsl_inlets(streams=None, with_source_ids=('',), with_types=('',),
         dict[str, dict[str, pylsl.StreamInlet]]: LSL inlet objects.
             Keys are the source IDs; values are dicts where the keys are stream
             types and values are stream inlets.
+
+    TODO:
+        * Try leveraging lsl.resolve_byprop or lsl.resolve_bypred
+        * inlet time_correction necessary for remotely generated timestamps?
     """
     if streams is None:
         streams = get_lsl_streams()
