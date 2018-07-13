@@ -2,12 +2,12 @@
 
 Rough implementation of a standalone bokeh server.
 
-Currently just grabs the most recent sample from Data.data every time the
+Currently just grabs the most recent sample from Buffers.buffer every time the
 periodic callback executes. This is probably not the best way to do it, because
 the sampling rate is arbitrarily based on the value for
 `add_periodic_callback()`. For example, you can set the callback time to
 something faster than the sampling rate and you'll see that each value in
-`streamer.data.data` gets sampled a few times (starts to look like a step
+`buffer.data` gets sampled a few times (starts to look like a step
 function). Right now there's no good way to check that we're not dropping
 samples when updating.
 
@@ -17,7 +17,7 @@ the gridplot method seems to work well for this.
 TODO:
     * Figure out sampling method- possibly using Data's self.updated attribute
         to trigger an update? Maybe we can update everything "in-place" because
-        data.data already has a built-in window..
+        buffer.data already has a built-in window..
     * Automatically determine device name/set to title?
 """
 
@@ -32,21 +32,22 @@ from bokeh.server.server import Server
 from tornado import gen
 import time
 
+
 class Plotter():
     """Base class for plotting."""
 
-    def __init__(self, data):
+    def __init__(self, buffer):
         """Construct a `Plotter` instance.
 
         Args:
-            data (buffers.Buffer): Data object managing data to be plotted.
+            buffer (buffers.Buffer): Data object managing data to be plotted.
             plot_params (dict): Plot display parameters.
         """
-        self.data = data
+        self.buffer = buffer
         # output_file('WizardHat Plotter.html')
 
 
-class Lines():
+class Lines(Plotter):
     """Multiple (stacked) line plots.
 
     Expects a two-dimensional `buffers.Buffer` object (such as `TimeSeries`) where
@@ -56,11 +57,11 @@ class Lines():
     plots of each data source with the 'D' key.
     """
 
-    def __init__(self, data, n_samples=5000, palette='Category10',
-                 bgcolor="white", autostart=True):
+    def __init__(self, buffer, n_samples=5000, palette='Category10',
+                 bgcolor="white", autostart=True, **kwargs):
         """Construct a `Lines` instance.
         Args:
-            data (buffers.Buffer or List[buffers.Buffer]): Data object(s) managing data
+            buffer (buffers.Buffer or List[buffers.Buffer]): Objects with data
                 to be plotted. Multiple objects may be passed in a list, in
                 which case the plot can cycle through plotting the data in
                 each object by pressing 'd'. However, all data objects passed
@@ -69,17 +70,17 @@ class Lines():
             plot_params (dict): Plot display parameters.
         """
 
-        self.data = data
+        super().__init__(buffer, **kwargs)
 
-        # TODO: initialize with existing samples in self.data.data
-        data_dict = {name:[]#[self.data.data[name][:n_samples]]
-                     for name in self.data.dtype.names}
+        # TODO: initialize with existing samples in self.buffer.data
+        data_dict = {name:[]  # [self.buffer.data[name][:n_samples]]
+                     for name in self.buffer.dtype.names}
         self._source = ColumnDataSource(data_dict)
         self.server = Server({'/': self._app_manager})
         self._update_thread = Thread(target=self._get_new_samples)
         self._n_samples = n_samples
 
-        self._colors = palettes[palette][len(self.data.ch_names)]
+        self._colors = palettes[palette][len(self.buffer.ch_names)]
         self._bgcolor = bgcolor
 
         if autostart:
@@ -98,7 +99,7 @@ class Lines():
 
     def _set_layout(self):
         self.plots = []
-        for i, ch in enumerate(self.data.ch_names):
+        for i, ch in enumerate(self.buffer.ch_names):
             p = figure(plot_height=100,
                        tools="xpan,xwheel_zoom,xbox_zoom,reset",
                        x_axis_type='datetime', y_axis_location="right")#,y_range=(-10,10))
@@ -126,12 +127,12 @@ class Lines():
         #time delay allows the server to boot before samples get sent to it.
         time.sleep(1)
         while True:
-            self.data.updated.wait()
-            data_dict = {name: self.data.last_samples[name]
-                         for name in self.data.dtype.names}
+            self.buffer.updated.wait()
+            data_dict = {name: self.buffer.last_samples[name]
+                         for name in self.buffer.dtype.names}
             try:  # don't freak out if IOLoop
                 self._curdoc.add_next_tick_callback(partial(self._update,
                                                             data_dict))
             except AttributeError:
                 pass
-            self.data.updated.clear()
+            self.buffer.updated.clear()

@@ -22,7 +22,7 @@ TODO:
    https://github.com/sccn/labstreaminglayer
 """
 
-from wizardhat import buffers
+from wizardhat.buffers import TimeSeries
 
 from serial.serialutil import SerialException
 import threading
@@ -99,7 +99,7 @@ class Receiver:
         self._source_id = source_id
 
         # acquire inlet parameters
-        self.sfreq, self.n_chan, self.ch_names, self.data = {}, {}, {}, {}
+        self.sfreq, self.n_chan, self.ch_names, self.buffers = {}, {}, {}, {}
         for name, inlet in self._inlets.items():
             info = inlet.info()
             self.sfreq[name] = info.nominal_srate()
@@ -114,11 +114,11 @@ class Receiver:
 
             # instantiate the `buffers.TimeSeries` instances
             metadata = {"pipeline": [type(self).__name__]}
-            self.data[name] = buffers.TimeSeries.with_window(self.ch_names[name],
-                                                          self.sfreq[name],
-                                                          metadata=metadata,
-                                                          label=info.name(),
-                                                          **kwargs)
+            self.buffers[name] = TimeSeries.with_window(self.ch_names[name],
+                                                        self.sfreq[name],
+                                                        metadata=metadata,
+                                                        label=info.name(),
+                                                        **kwargs)
 
         self._dejitter = dejitter
         self._threads = {}
@@ -167,7 +167,7 @@ class Receiver:
                         timestamps = self._dejitter_timestamps(name,
                                                                timestamps)
                     try:
-                        self.data[name].update(timestamps, samples)
+                        self.buffers[name].update(timestamps, samples)
                     except ValueError:
                         print(name, '\n', len(samples[0]))
 
@@ -175,8 +175,8 @@ class Receiver:
             print("BGAPI streaming interrupted. Device disconnected?")
 
         finally:
-            # write any remaining samples in `self.data` to file
-            self.data[name].write_to_file()
+            # write any remaining samples in `self.buffers` to file
+            self.buffers[name].write_to_file()
 
     def _new_threads(self, names=None):
         # break loop in `stream` to cause thread to return
@@ -191,7 +191,7 @@ class Receiver:
 
     def _dejitter_timestamps(self, name, timestamps):
         """Partial function for more concise call during loop."""
-        last_time = self.data[name].last_sample['time']
+        last_time = self.buffers[name].last_sample['time']
         if self.sfreq[name] > 0:
             dejittered = dejitter_timestamps(timestamps,
                                              sfreq=self.sfreq[name],

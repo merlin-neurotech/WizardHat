@@ -45,21 +45,21 @@ To begin streaming, you will need first to import `ble2lsl` and `wizardhat.acqui
 
 You then need to create a streaming outlet which establishes a Bluetooth connection with the EEG device:
 
-	outlet = ble2lsl.Streamer(muse2016)
+	streamer = ble2lsl.Streamer(muse2016)
 
 To stream dummy data through an outlet that mimics (number of channels, sample rate, and metadata) the Muse 2016
 
-	dummy_outlet = ble2lsl.Dummy(muse2016)
+	dummy_streamer = ble2lsl.Dummy(muse2016)
 
 Next, to store and record the data, add the following line to capture the outlet stream:
 
-	streamer = acquire.LSLStreamer()
+	receiver = acquire.Receiver()
 
 Notice how you do not need to pass the outlet streamer as an argument to this function. LSL can stream over a local network, and `ble2lsl` need not be run in the same process as `wizardhat`. LSLStreamer automatically finds and connects to the LSL outlet. (More work is needed to allow LSLStreamer to distinguish multiple outlets, when they are available.)
 
 Now that your streamer is is receiving data, you are able to visualize and manipulate it online. The data object is a structured array with timestamps as the first column, and EEG channel data values as the following columns. It contains both raw values and metadata regarding the device in use. The current copy of the stored data is in
 
-	streamer.data.data
+	streamer.buffers["EEG"].data
 
 After each time window, data is saved to a CSV file in your directory under a folder called 'data' and is constantly updated while your stream is running. Each new streaming session (specifically, data object) you establish will create a new CSV file, accompanied by a JSON file of the same named containing the stream metadata.
 
