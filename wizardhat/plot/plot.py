@@ -35,7 +35,7 @@ import time
 class Plotter():
     """Base class for plotting."""
 
-    def __init__(self, data):
+    def __init__(self, data,autostart=True):
         """Construct a `Plotter` instance.
 
         Args:
@@ -44,7 +44,23 @@ class Plotter():
         """
         self.data = data
         # output_file('WizardHat Plotter.html')
-
+        self.server = Server({'/': self._app_manager})
+        self.plot_lines = Lines(self.data)
+        if autostart:
+            self.run_server()
+        
+    
+    def run_server(self):
+        self.server.start()
+        self.server.io_loop.add_callback(self.server.show, '/')
+        self.plot_lines._update_thread.start()
+        self.server.io_loop.start()
+    
+    def _app_manager(self, curdoc):
+        self.plot_lines._curdoc = curdoc
+        self.plot_lines._set_layout()
+        self.plot_lines._set_callbacks()
+    
 
 class Lines():
     """Multiple (stacked) line plots.
@@ -57,7 +73,7 @@ class Lines():
     """
 
     def __init__(self, data, n_samples=5000, palette='Category10',
-                 bgcolor="white", autostart=True):
+                 bgcolor="white"):
         """Construct a `Lines` instance.
         Args:
             data (data.Data or List[data.Data]): Data object(s) managing data
@@ -75,26 +91,10 @@ class Lines():
         data_dict = {name:[]#[self.data.data[name][:n_samples]]
                      for name in self.data.dtype.names}
         self._source = ColumnDataSource(data_dict)
-        self.server = Server({'/': self._app_manager})
         self._update_thread = Thread(target=self._get_new_samples)
         self._n_samples = n_samples
-
         self._colors = palettes[palette][len(self.data.ch_names)]
         self._bgcolor = bgcolor
-
-        if autostart:
-            self.run_server()
-
-    def run_server(self):
-        self.server.start()
-        self.server.io_loop.add_callback(self.server.show, '/')
-        self._update_thread.start()
-        self.server.io_loop.start()
-
-    def _app_manager(self, curdoc):
-        self._curdoc = curdoc
-        self._set_layout()
-        self._set_callbacks()
 
     def _set_layout(self):
         self.plots = []
@@ -115,7 +115,7 @@ class Lines():
     def _set_callbacks(self):
         self._curdoc.add_root(gridplot(self.plots, toolbar_location="left",
                                        plot_width=1000))
-        self._curdoc.title = "Dummy EEG Stream"
+        self._curdoc.title = "WizardHat"
 
     @gen.coroutine
     def _update(self, data_dict):

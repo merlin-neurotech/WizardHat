@@ -7,6 +7,6 @@ from wizardhat import acquire, plot
 
 
 if __name__ == '__main__':
-    dummy_outlet = ble2lsl.DummyStreamer(muse2016)
+    dummy_outlet = ble2lsl.Dummy(muse2016)
     streamer = acquire.LSLStreamer()
-    plot.Lines(streamer.data)
+    plot.Plotter(streamer.data)
