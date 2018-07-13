@@ -10,6 +10,9 @@ All classes streaming data through an LSL outlet should subclass
 Also includes dummy streamer objects, which do not acquire data over BLE but
 pass local data through an LSL outlet, e.g. for testing.
 
+TODO:
+    * AttrDict for attribute-like dict access from device PARAMS?
+
 .. _Generic Attribute Profile:
    https://www.bluetooth.com/specifications/gatt/generic-attributes-overview
 
@@ -356,17 +359,19 @@ class Dummy(BaseStreamer):
         self._address = "DUMMY"
         self._init_lsl_outlets()
 
-        sfreqs = self._stream_params["nominal_srate"]
+        nominal_srate = self._stream_params["nominal_srate"]
+        self._subscriptions = {name for name in self._subscriptions
+                               if nominal_srate[name] > 0}
         chunk_shapes = {name: self._chunks[name].shape
                         for name in self._subscriptions}
-        self._delays = {name: 1 / (sfreqs[name] / chunk_shapes[name][1])
+        self._delays = {name: 1 / (nominal_srate[name] / chunk_shapes[name][1])
                         for name in self._subscriptions}
 
         # generate or load fake data
         if chunk_iterator is None:
             chunk_iterator = NoisySinusoids
         self._chunk_iter = {name: chunk_iterator(chunk_shapes[name],
-                                                 sfreqs[name])
+                                                 nominal_srate[name])
                             for name in self._subscriptions}
 
         # threads to mimic incoming BLE data
@@ -433,19 +438,19 @@ class ChunkIterator:
     Placeholder until I figure out how this might work as a base class.
     """
 
-    def __init__(self, chunk_shape, sfreq):
+    def __init__(self, chunk_shape, srate):
         self._chunk_shape = chunk_shape
-        self._sfreq = sfreq
+        self._srate = srate
 
 
 class NoisySinusoids(ChunkIterator):
     """Iterator class to provide noisy sinusoidal chunks of data."""
 
-    def __init__(self, chunk_shape, sfreq, freqs=[5, 10, 12, 20], noise_amp=1):
-        super().__init__(chunk_shape=chunk_shape, sfreq=sfreq)
+    def __init__(self, chunk_shape, srate, freqs=[5, 10, 12, 20], noise_std=1):
+        super().__init__(chunk_shape=chunk_shape, srate=srate)
         self._ang_freqs = 2 * np.pi * np.array(freqs)
-        self._speriod = 1 / self._sfreq
-        self._chunk_t_incr = (1 + chunk_shape[0]) / self._sfreq
+        self._speriod = 1 / self._srate
+        self._chunk_t_incr = (1 + chunk_shape[0]) / self._srate
         self._freq_amps = np.random.randint(1, 5, len(freqs))
 
     def __iter__(self):
@@ -455,7 +460,7 @@ class NoisySinusoids(ChunkIterator):
 
     def __next__(self):
         # start with noise
-        chunk = np.random.normal(0, 1, self._chunk_shape)
+        chunk = np.random.normal(0, noise_std, self._chunk_shape)
 
         # sum frequencies with random amplitudes
         for i, freq in enumerate(self._ang_freqs):

@@ -166,10 +166,7 @@ class Receiver:
                     if self._dejitter:
                         timestamps = self._dejitter_timestamps(name,
                                                                timestamps)
-                    try:
-                        self.buffers[name].update(timestamps, samples)
-                    except ValueError:
-                        print(name, '\n', len(samples[0]))
+                    self.buffers[name].update(timestamps, samples)
 
         except SerialException:
             print("BGAPI streaming interrupted. Device disconnected?")

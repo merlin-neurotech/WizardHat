@@ -8,6 +8,7 @@ interface methods are defined in that subclass.
 
 TODO:
     * Support for commonly-used data formats; HDF5 for longer recordings. XDF?
+      MessagePack. JSON.
 """
 
 import wizardhat.utils as utils
