@@ -24,7 +24,7 @@ TODO:
 from functools import partial
 from threading import Thread
 
-from bokeh.layouts import row,gridplot, widgetbox
+from bokeh.layouts import row,column,gridplot, widgetbox
 from bokeh.models.widgets import Button, RadioButtonGroup
 from bokeh.models import ColumnDataSource
 from bokeh.palettes import all_palettes as palettes
@@ -55,8 +55,13 @@ class Plotter():
 
         self.stream_option = RadioButtonGroup(labels=['EEG','ACC','GYR'],active=0)
         self.filter_option = RadioButtonGroup(labels=['Low Pass','High Pass', 'Band Pass'],active=0)
-        self.widget_box = widgetbox(self.stream_option,self.filter_option,width=300)
-        
+        self.record_new = Button(label='New Recording')
+        self.stop_recording = Button(label='Stop Recording')
+        self.type_option = RadioButtonGroup(labels=['Time Series','Frequency'],active=0)
+        self.stop_server = Button(label='Close Server')
+        self.widget_box = widgetbox(self.stream_option,self.filter_option,self.record_new,self.stop_recording,width=300)
+        self.stop_server.on_click(print('hi'))
+
     def run_server(self):
         self.server.start()
         self.server.io_loop.add_callback(self.server.show, '/')
@@ -69,8 +74,8 @@ class Plotter():
         self._set_callbacks()
     
     def _set_callbacks(self):
-        self.plot_lines._curdoc.add_root(row(self.widget_box,gridplot(self.plot_lines.plots, toolbar_location="left",
-                                       plot_width=1000)))
+        self.plot_lines._curdoc.add_root(row(self.widget_box,column(self.type_option,gridplot(self.plot_lines.plots, toolbar_location="left",
+                                       plot_width=1000),self.stop_server)))
         self.plot_lines._curdoc.title = "WizardHat"
     
 
@@ -123,7 +128,6 @@ class Lines():
             p.line(x='time', y=ch, alpha=0.8, line_width=2,
                    color=self._colors[i], source=self._source)
             self.plots.append([p])
-
 
 
     @gen.coroutine
