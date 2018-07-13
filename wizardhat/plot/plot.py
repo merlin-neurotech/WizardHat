@@ -24,7 +24,8 @@ TODO:
 from functools import partial
 from threading import Thread
 
-from bokeh.layouts import gridplot
+from bokeh.layouts import row,gridplot, widgetbox
+from bokeh.models.widgets import Button, RadioButtonGroup
 from bokeh.models import ColumnDataSource
 from bokeh.palettes import all_palettes as palettes
 from bokeh.plotting import figure
@@ -46,10 +47,16 @@ class Plotter():
         # output_file('WizardHat Plotter.html')
         self.server = Server({'/': self._app_manager})
         self.plot_lines = Lines(self.data)
+        self.add_widgets()
         if autostart:
             self.run_server()
         
-    
+    def add_widgets(self):
+
+        self.stream_option = RadioButtonGroup(labels=['EEG','ACC','GYR'],active=0)
+        self.filter_option = RadioButtonGroup(labels=['Low Pass','High Pass', 'Band Pass'],active=0)
+        self.widget_box = widgetbox(self.stream_option,self.filter_option,width=300)
+        
     def run_server(self):
         self.server.start()
         self.server.io_loop.add_callback(self.server.show, '/')
@@ -59,7 +66,12 @@ class Plotter():
     def _app_manager(self, curdoc):
         self.plot_lines._curdoc = curdoc
         self.plot_lines._set_layout()
-        self.plot_lines._set_callbacks()
+        self._set_callbacks()
+    
+    def _set_callbacks(self):
+        self.plot_lines._curdoc.add_root(row(self.widget_box,gridplot(self.plot_lines.plots, toolbar_location="left",
+                                       plot_width=1000)))
+        self.plot_lines._curdoc.title = "WizardHat"
     
 
 class Lines():
@@ -112,10 +124,7 @@ class Lines():
                    color=self._colors[i], source=self._source)
             self.plots.append([p])
 
-    def _set_callbacks(self):
-        self._curdoc.add_root(gridplot(self.plots, toolbar_location="left",
-                                       plot_width=1000))
-        self._curdoc.title = "WizardHat"
+
 
     @gen.coroutine
     def _update(self, data_dict):
