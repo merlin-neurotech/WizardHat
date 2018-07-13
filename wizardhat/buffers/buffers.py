@@ -1,7 +1,7 @@
 """Objects for data storage.
 
 All instantiable classes in this module are subclasses of the abstract class
-`Data`, which enforces a common interface to its children. However, it imposes
+`Buffer`, which enforces a common interface to its children. However, it imposes
 no constraints on the structure of the stored data. Thus, storage in any kind
 of data structure may be implemented in a subclass, so long as the appropriate
 interface methods are defined in that subclass.
@@ -21,18 +21,18 @@ import threading
 import numpy as np
 
 
-class Data:
+class Buffer:
     """Abstract base class of data management classes.
 
     Provides management of instance-related filenames and pipeline metadata for
     subclasses. Pipeline metadata consists of a field in the `metadata`
-    attribute which tracks the `Data` and `transform.Transformer` subclasses
+    attribute which tracks the `Buffer` and `transform.Transformer` subclasses
     through which the data has flowed. Complete instance metadata is written
     to a `.json` file with the same name as the instance's data file (minus
     its extension). Therefore, each data file corresponds to a `.json` file
     that describes how the data was generated.
 
-    As an abstract class, `Data` should not be instantiated directly, but must
+    As an abstract class, `Buffer` should not be instantiated directly, but must
     be subclassed (e.g. `TimeSeries`). Subclasses should conform to expected
     behaviour by overriding methods or properties that raise
     `NotImplementedError`; though `data` need not be overrided so long as the
@@ -66,11 +66,11 @@ class Data:
         metadata (dict): All metadata included in instance's `.json`.
 
     Todo:
-        * Implement with abc.ABC (prevent instantiation of Data itself)
+        * Implement with abc.ABC (prevent instantiation of Buffer itself)
         * Detailed pipeline metadata: not only class names but attribute values
         * Decorator for locked methods
         * Is update really part of interface (Transformer expecting one type of
-          Data will fail if it tries to update another, probably)
+          Buffer will fail if it tries to update another, probably)
     """
 
     def __init__(self, metadata=None, filename=None, data_dir='./data',
@@ -191,7 +191,7 @@ class Data:
         return utils.deepcopy_mask(self, memo, mask)
 
 
-class TimeSeries(Data):
+class TimeSeries(Buffer):
     """Manages 2D time series data: rows of samples indexed in order of time.
 
     Data is stored in a NumPy structured array where `'time'` is the first
@@ -220,7 +220,7 @@ class TimeSeries(Data):
                 be Python base types (e.g. `float`) or NumPy base dtypes
                ( e.g. `np.float64`).
         """
-        Data.__init__(self, **kwargs)
+        Buffer.__init__(self, **kwargs)
 
         if str(channel_fmt) == channel_fmt:  # quack
             channel_fmt = [channel_fmt] * len(ch_names)

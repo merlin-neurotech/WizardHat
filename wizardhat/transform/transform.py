@@ -17,8 +17,8 @@ class Transformer(threading.Thread):
     """Base class for transforming data stored in `Data` objects.
 
     Attributes:
-        data_in (data.Data): Input data.
-        data_out (data.Data): Output data.
+        data_in (buffers.Buffer): Input data.
+        data_out (buffers.Buffer): Output data.
     """
     def __init__(self, data_in):
         threading.Thread.__init__(self)
@@ -44,7 +44,7 @@ class MNETransformer(Transformer):
         """Construct an `MNETransformer` instance.
 
         Args:
-            data_in (data.TimeSeries): Input time series data.
+            data_in (buffers.TimeSeries): Input time series data.
             sfreq (int): Nominal sampling frequency of the time series.
             source_type (str): Source of data.
                 See MNE documentation for acceptable values.
@@ -94,7 +94,7 @@ class MNEFilter(MNETransformer):
         """Construct an `MNEFilter` instance.
 
         Args:
-            data_in (data.TimeSeries): Input time series.
+            data_in (buffers.TimeSeries): Input time series.
             l_freq (float): Low-frequency cutoff.
             h_freq (float): High-frequency cutoff.
             sfreq (int): Nominal sampling frequency of input.

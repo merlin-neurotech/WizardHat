@@ -22,7 +22,7 @@ TODO:
    https://github.com/sccn/labstreaminglayer
 """
 
-from wizardhat import data
+from wizardhat import buffers
 
 from serial.serialutil import SerialException
 import threading
@@ -36,7 +36,7 @@ class Receiver:
 
     Attributes:
         inlets (dict[pylsl.StreamInlet]): The LSL inlet(s) to acquire.
-        data (data.TimeSeries): Object in which the incoming data is stored,
+        data (buffers.TimeSeries): Object in which the incoming data is stored,
             and which manages writing of that data to disk.
         sfreq (int): The nominal sampling frequency of the stream.
         n_chan (int): The number of channels in the stream.
@@ -68,7 +68,7 @@ class Receiver:
             max_chunklen (int): Maximum number of samples per chunk pulled
                 from the inlets. Default: 0 (determined at stream outlet).
             autostart (bool): Whether to start streaming on instantiation.
-            kwargs: Additional keyword arguments to default `data.TimeSeries`.
+            kwargs: Additional keyword arguments to default `buffers.TimeSeries`.
 
         """
         streams = get_lsl_streams()
@@ -112,9 +112,9 @@ class Receiver:
                 print("Duplicate channel names in {} stream info"
                       .format(name))
 
-            # instantiate the `data.TimeSeries` instances
+            # instantiate the `buffers.TimeSeries` instances
             metadata = {"pipeline": [type(self).__name__]}
-            self.data[name] = data.TimeSeries.with_window(self.ch_names[name],
+            self.data[name] = buffers.TimeSeries.with_window(self.ch_names[name],
                                                           self.sfreq[name],
                                                           metadata=metadata,
                                                           label=info.name(),

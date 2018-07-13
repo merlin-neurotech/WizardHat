@@ -1,4 +1,4 @@
-"""Plotting of data in `data.Data` objects.
+"""Plotting of data in `buffers.Buffer` objects.
 
 Rough implementation of a standalone bokeh server.
 
@@ -39,7 +39,7 @@ class Plotter():
         """Construct a `Plotter` instance.
 
         Args:
-            data (data.Data): Data object managing data to be plotted.
+            data (buffers.Buffer): Data object managing data to be plotted.
             plot_params (dict): Plot display parameters.
         """
         self.data = data
@@ -49,7 +49,7 @@ class Plotter():
 class Lines():
     """Multiple (stacked) line plots.
 
-    Expects a two-dimensional `data.Data` object (such as `TimeSeries`) where
+    Expects a two-dimensional `buffers.Buffer` object (such as `TimeSeries`) where
     all columns after the first give the data used to plot individual lines.
     Multiple data sources may be given in a list, assuming they have the same
     form (number of channels and rows/samples); the user can cycle between
@@ -60,7 +60,7 @@ class Lines():
                  bgcolor="white", autostart=True):
         """Construct a `Lines` instance.
         Args:
-            data (data.Data or List[data.Data]): Data object(s) managing data
+            data (buffers.Buffer or List[buffers.Buffer]): Data object(s) managing data
                 to be plotted. Multiple objects may be passed in a list, in
                 which case the plot can cycle through plotting the data in
                 each object by pressing 'd'. However, all data objects passed
