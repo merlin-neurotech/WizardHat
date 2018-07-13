@@ -339,22 +339,16 @@ class Streamer(BaseStreamer):
 class Dummy(BaseStreamer):
     """Mimicks a device and pushes local data into an LSL outlet.
 
-    Attributes:
-        csv_file (str): Filename of `.csv` containing local data.
-
     TODO:
-        * take a data iterator instead of CSV file/single random generator
-        * implement CSV file streaming
+        * verify timestamps/delays (seems too fast in plot.Lines)
     """
 
-    def __init__(self, device, chunk_iterator=None, csv_file=None,
-                 autostart=True, **kwargs):
+    def __init__(self, device, chunk_iterator=None, autostart=True, **kwargs):
         """Construct a `Dummy` instance.
 
         Args:
             device: BLE device to impersonate (i.e. from `ble2lsl.devices`).
             chunk_iterator (generator): Class that iterates through chunks.
-            csv_file (str): CSV file containing pre-generated data to stream.
             autostart (bool): Whether to start streaming on instantiation.
         """
         BaseStreamer.__init__(self, device=device, **kwargs)
@@ -369,15 +363,11 @@ class Dummy(BaseStreamer):
                         for name in self._subscriptions}
 
         # generate or load fake data
-        if csv_file is None:
-            if chunk_iterator is None:
-                chunk_iterator = NoisySinusoids
-            self._get_chunk = {name: iter(chunk_iterator(chunk_shapes[name],
-                                                         sfreqs[name]))
-                               for name in self._subscriptions}
-        else:
-            raise NotImplementedError("CSV file loading not yet available")
-            # self._csv_file = csv_file
+        if chunk_iterator is None:
+            chunk_iterator = NoisySinusoids
+        self._chunk_iter = {name: chunk_iterator(chunk_shapes[name],
+                                                 sfreqs[name])
+                            for name in self._subscriptions}
 
         # threads to mimic incoming BLE data
         self._threads = {name: threading.Thread(target=self._stream,
@@ -394,15 +384,18 @@ class Dummy(BaseStreamer):
             self._threads[name].start()
 
     def stop(self):
-        """Stop pushing data. Restart requires a new `Dummy` instance."""
+        """Stop pushing data. Ends execution of chunk streaming threads.
+
+        Restart requires a new `Dummy` instance.
+        """
         self._proceed = False
 
     def _stream(self, name):
         """Run in thread to mimic periodic hardware input."""
-        while self._proceed:
-            # print("cc: ", self._chunks[name])
-            # print("nc: ", next(self._get_chunk[name]))
-            self._chunks[name] = next(self._get_chunk[name])
+        for chunk in self._chunk_iter[name]:
+            if not self._proceed:
+                break
+            self._chunks[name] = chunk
             timestamp = time.time()
             self._push_func[name](name, timestamp)
             time.sleep(self._delays[name])
@@ -434,14 +427,25 @@ def empty_chunks(stream_params, subscriptions):
     return chunks
 
 
-class NoisySinusoids:
+class ChunkIterator:
+    """Generator object (i.e. iterator) that yields chunks.
+
+    Placeholder until I figure out how this might work as a base class.
+    """
+
+    def __init__(self, chunk_shape, sfreq):
+        self._chunk_shape = chunk_shape
+        self._sfreq = sfreq
+
+
+class NoisySinusoids(ChunkIterator):
     """Iterator class to provide noisy sinusoidal chunks of data."""
 
-    def __init__(self, chunk_shape, sfreq, freqs=[5, 10, 12, 20]):
-        self._chunk_shape = chunk_shape
+    def __init__(self, chunk_shape, sfreq, freqs=[5, 10, 12, 20], noise_amp=1):
+        super().__init__(chunk_shape=chunk_shape, sfreq=sfreq)
         self._ang_freqs = 2 * np.pi * np.array(freqs)
-        self._speriod = 1 / sfreq
-        self._chunk_t_incr = (1 + chunk_shape[0]) / sfreq
+        self._speriod = 1 / self._sfreq
+        self._chunk_t_incr = (1 + chunk_shape[0]) / self._sfreq
         self._freq_amps = np.random.randint(1, 5, len(freqs))
 
     def __iter__(self):
