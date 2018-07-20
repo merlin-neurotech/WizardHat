@@ -129,11 +129,16 @@ class BaseStreamer:
             ch_names = self._stream_params["ch_names"][name]
             # use user-specified ch_names if available and right no. channels
             if name in self._ch_names:
-                if len(self._ch_names[name]) == len(ch_names):
-                    ch_names = self._ch_names[name]
+                user_ch_names = self._ch_names[name]
+                if len(user_ch_names) == len(ch_names):
+                    if len(user_ch_names) == len(set(user_ch_names)):
+                        ch_names = self._ch_names[name]
+                    else:
+                        print("Non-unique names in user-defined {} ch_names; "
+                              .format(name), "using default ch_names.")
                 else:
-                    print("Wrong # of channels in user-defined {} ch_names"
-                          .format(name))
+                    print("Wrong # of channels in user-defined {} ch_names; "
+                          .format(name), "using default ch_names.")
 
             for c, ch_name in enumerate(ch_names):
                 unit = self._stream_params["units"][name][c]
