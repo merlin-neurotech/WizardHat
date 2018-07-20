@@ -47,7 +47,8 @@ class BaseStreamer:
         * Push chunks, not samples (have to generate intra-chunk timestamps anyway)
     """
 
-    def __init__(self, device, subscriptions=None, time_func=time.time):
+    def __init__(self, device, subscriptions=None, time_func=time.time,
+                 ch_names=None):
         """Construct a `BaseStreamer` object.
 
         Args:
@@ -55,6 +56,8 @@ class BaseStreamer:
             time_func (function): Function for generating timestamps.
             subscriptions (Iterable[str]): Types of device data to stream.
                 Some subset of `SUBSCRIPTION_NAMES`.
+            ch_names (dict[Iterable[str]]): User-defined channel names.
+                e.g. `{'EEG': ('Ch1', 'Ch2', 'Ch3', 'Ch4')}`.
         """
         self._device = device
         if subscriptions is None:
@@ -65,6 +68,7 @@ class BaseStreamer:
                 subscriptions = device.STREAMS
         self._subscriptions = tuple(subscriptions)
         self._time_func = time_func
+        self._user_ch_names = ch_names
         self._stream_params = self._device.PARAMS['streams']
 
         self._chunk_idxs = stream_idxs_zeros(self._subscriptions)
@@ -122,7 +126,16 @@ class BaseStreamer:
 
         channels = desc.append_child("channels")
         try:
-            for c, ch_name in enumerate(self._stream_params["ch_names"][name]):
+            ch_names = self._stream_params["ch_names"][name]
+            # use user-specified ch_names if available and right no. channels
+            if name in self._ch_names:
+                if len(self._ch_names[name]) == len(ch_names):
+                    ch_names = self._ch_names[name]
+                else:
+                    print("Wrong # of channels in user-defined {} ch_names"
+                          .format(name))
+
+            for c, ch_name in enumerate(ch_names):
                 unit = self._stream_params["units"][name][c]
                 type_ = self._stream_params["type"][name]
                 channels.append_child("channel") \
