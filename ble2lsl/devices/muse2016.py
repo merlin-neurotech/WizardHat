@@ -106,7 +106,7 @@ CONVERT_FUNCS = streams_dict([lambda data: 0.48828125 * (data - 2048),
                               lambda data: 0.0074768 * data.reshape((3, 3)),
                               lambda data: np.array([data[0] / 512,
                                                      2.2 * data[1],
-                                                     data[2], data[3]]).reshape((4, 1)),
+                                                     data[2], data[3]]).reshape((1, 4)),
                               lambda data: None])
 """Functions to render unpacked data into the appropriate shape and units."""
 
@@ -145,7 +145,10 @@ class PacketHandler(BasePacketHandler):
                 if not handle == EEG_HANDLE_RECEIVE_ORDER[-1]:
                     return
             else:
-                self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
+                try:
+                    self._chunks[name][:, :] = CONVERT_FUNCS[name](data)
+                except ValueError:
+                    print(name)
 
             self._chunk_idxs[name] = unpacked[0]
             self._enqueue_chunk(name)

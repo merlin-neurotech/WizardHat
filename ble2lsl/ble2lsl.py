@@ -68,7 +68,7 @@ class BaseStreamer:
                 subscriptions = device.STREAMS
         self._subscriptions = tuple(subscriptions)
         self._time_func = time_func
-        self._user_ch_names = ch_names
+        self._user_ch_names = ch_names if ch_names is not None else {}
         self._stream_params = self._device.PARAMS['streams']
 
         self._chunk_idxs = stream_idxs_zeros(self._subscriptions)
@@ -128,11 +128,11 @@ class BaseStreamer:
         try:
             ch_names = self._stream_params["ch_names"][name]
             # use user-specified ch_names if available and right no. channels
-            if name in self._ch_names:
-                user_ch_names = self._ch_names[name]
+            if name in self._user_ch_names:
+                user_ch_names = self._user_ch_names[name]
                 if len(user_ch_names) == len(ch_names):
                     if len(user_ch_names) == len(set(user_ch_names)):
-                        ch_names = self._ch_names[name]
+                        ch_names = user_ch_names
                     else:
                         print("Non-unique names in user-defined {} ch_names; "
                               .format(name), "using default ch_names.")
