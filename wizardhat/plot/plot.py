@@ -24,7 +24,8 @@ TODO:
 from functools import partial
 from threading import Thread
 
-from bokeh.layouts import gridplot
+from bokeh.layouts import row,gridplot, widgetbox
+from bokeh.models.widgets import Button, RadioButtonGroup
 from bokeh.models import ColumnDataSource
 from bokeh.palettes import all_palettes as palettes
 from bokeh.plotting import figure
@@ -36,7 +37,7 @@ import time
 class Plotter():
     """Base class for plotting."""
 
-    def __init__(self, buffer):
+    def __init__(self, buffer, autostart=True):
         """Construct a `Plotter` instance.
 
         Args:
@@ -45,7 +46,34 @@ class Plotter():
         """
         self.buffer = buffer
         # output_file('WizardHat Plotter.html')
+        self.server = Server({'/': self._app_manager})
+        self.plot_lines = Lines(self.data)
+        self.add_widgets()
+        if autostart:
+            self.run_server()
+        
+    def add_widgets(self):
 
+        self.stream_option = RadioButtonGroup(labels=['EEG','ACC','GYR'],active=0)
+        self.filter_option = RadioButtonGroup(labels=['Low Pass','High Pass', 'Band Pass'],active=0)
+        self.widget_box = widgetbox(self.stream_option,self.filter_option,width=300)
+        
+    def run_server(self):
+        self.server.start()
+        self.server.io_loop.add_callback(self.server.show, '/')
+        self.plot_lines._update_thread.start()
+        self.server.io_loop.start()
+    
+    def _app_manager(self, curdoc):
+        self.plot_lines._curdoc = curdoc
+        self.plot_lines._set_layout()
+        self._set_callbacks()
+    
+    def _set_callbacks(self):
+        self.plot_lines._curdoc.add_root(row(self.widget_box,gridplot(self.plot_lines.plots, toolbar_location="left",
+                                       plot_width=1000)))
+        self.plot_lines._curdoc.title = "WizardHat"
+    
 
 class Lines(Plotter):
     """Multiple (stacked) line plots.
@@ -58,7 +86,7 @@ class Lines(Plotter):
     """
 
     def __init__(self, buffer, n_samples=5000, palette='Category10',
-                 bgcolor="white", autostart=True, **kwargs):
+                 bgcolor="white", **kwargs):
         """Construct a `Lines` instance.
         Args:
             buffer (buffers.Buffer or List[buffers.Buffer]): Objects with data
@@ -76,26 +104,11 @@ class Lines(Plotter):
         data_dict = {name:[]  # [self.buffer.data[name][:n_samples]]
                      for name in self.buffer.dtype.names}
         self._source = ColumnDataSource(data_dict)
-        self.server = Server({'/': self._app_manager})
         self._update_thread = Thread(target=self._get_new_samples)
         self._n_samples = n_samples
 
         self._colors = palettes[palette][len(self.buffer.ch_names)]
         self._bgcolor = bgcolor
-
-        if autostart:
-            self.run_server()
-
-    def run_server(self):
-        self.server.start()
-        self.server.io_loop.add_callback(self.server.show, '/')
-        self._update_thread.start()
-        self.server.io_loop.start()
-
-    def _app_manager(self, curdoc):
-        self._curdoc = curdoc
-        self._set_layout()
-        self._set_callbacks()
 
     def _set_layout(self):
         self.plots = []
@@ -113,10 +126,6 @@ class Lines(Plotter):
                    color=self._colors[i], source=self._source)
             self.plots.append([p])
 
-    def _set_callbacks(self):
-        self._curdoc.add_root(gridplot(self.plots, toolbar_location="left",
-                                       plot_width=1000))
-        self._curdoc.title = "Dummy EEG Stream"
 
     @gen.coroutine
     def _update(self, data_dict):
