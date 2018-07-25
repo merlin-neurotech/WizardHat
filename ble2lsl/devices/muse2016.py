@@ -9,7 +9,6 @@ TODO:
     * return standard acceleration units and not g's...
     * verify telemetry and IMU conversions and units
     * DRL/REF characteristic
-    * verify sample ID is chunk ID
     * don't use lambdas for CONVERT_FUNCS?
     * save Muse address to minimize connect time?
     * packet ID rollover (uint16) -- generalize in device file?
