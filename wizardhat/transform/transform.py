@@ -14,21 +14,23 @@ import numpy as np
 
 
 class Transformer(threading.Thread):
-    """Base class for transforming data stored in `Data` objects.
+    """Base class for transforming data stored in `Buffer` objects.
 
     Attributes:
-        data_in (data.Data): Input data.
-        data_out (data.Data): Output data.
+        buffer_in (buffers.Buffer): Input data.
+        buffer_out (buffers.Buffer): Output data.
     """
-    def __init__(self, data_in):
+
+    def __init__(self, buffer_in):
         threading.Thread.__init__(self)
-        self.data_in = data_in
+        self.buffer_in = buffer_in
 
     def similar_output(self):
-        """Called in `__init__` when `data_out` has same form as `data_in`."""
-        self.data_out = copy.deepcopy(self.data_in)
-        self.data_out.update_pipeline_metadata(self)
-        self.data_out.update_pipeline_metadata(self.data_out)
+        """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
+        """
+        self.buffer_out = copy.deepcopy(self.buffer_in)
+        self.buffer_out.update_pipeline_metadata(self)
+        self.buffer_out.update_pipeline_metadata(self.buffer_out)
 
     def run(self):
         raise NotImplementedError()
@@ -39,12 +41,13 @@ class MNETransformer(Transformer):
 
     Expects a single data source (e.g. EEG) with consistent units.
     """
-    def __init__(self, data_in, sfreq, source_type='eeg', scaling=1E6,
+
+    def __init__(self, buffer_in, sfreq, source_type='eeg', scaling=1E6,
                  montage='standard_1020'):
         """Construct an `MNETransformer` instance.
 
         Args:
-            data_in (data.TimeSeries): Input time series data.
+            buffer_in (buffers.TimeSeries): Input time series data.
             sfreq (int): Nominal sampling frequency of the time series.
             source_type (str): Source of data.
                 See MNE documentation for acceptable values.
@@ -55,16 +58,16 @@ class MNETransformer(Transformer):
         TODO:
             * sfreq from timestamps? (not nominal)
         """
-        Transformer.__init__(self, data_in=data_in)
+        Transformer.__init__(self, buffer_in=buffer_in)
 
-        channel_types = [source_type] * len(data_in.ch_names)
+        channel_types = [source_type] * len(buffer_in.ch_names)
         self.source_type = source_type
-        self.info = mne.create_info(data_in.ch_names, sfreq, channel_types)
+        self.info = mne.create_info(buffer_in.ch_names, sfreq, channel_types)
         self._sfreq = sfreq
 
         if source_type == 'eeg':
             self.montage = mne.channels.read_montage(montage,
-                                                     ch_names=data_in.ch_names)
+                                                     ch_names=buffer_in.ch_names)
         if not source_type == 'meg':
             # MNE defaults to `meg=True` and everything else `False`...
             self.picks = mne.pick_types(self.info, meg=False,
@@ -88,20 +91,20 @@ class MNETransformer(Transformer):
 
 
 class MNEFilter(MNETransformer):
-    """Apply MNE filters to TimeSeries data objects."""
+    """Apply MNE filters to TimeSeries buffer objects."""
 
-    def __init__(self, data_in, l_freq, h_freq, sfreq, update_interval=10):
+    def __init__(self, buffer_in, l_freq, h_freq, sfreq, update_interval=10):
         """Construct an `MNEFilter` instance.
 
         Args:
-            data_in (data.TimeSeries): Input time series.
+            buffer_in (buffers.TimeSeries): Input time series.
             l_freq (float): Low-frequency cutoff.
             h_freq (float): High-frequency cutoff.
             sfreq (int): Nominal sampling frequency of input.
             update_interval (int): How often (in terms of input updates) to
                 filter the data.
         """
-        MNETransformer.__init__(self, data_in=data_in, sfreq=sfreq)
+        MNETransformer.__init__(self, buffer_in=buffer_in, sfreq=sfreq)
         self.similar_output()
 
         self._band = (l_freq, h_freq)
@@ -112,20 +115,20 @@ class MNEFilter(MNETransformer):
         self.start()
 
     def run(self):
-        # wait until data_in is updated
+        # wait until buffer_in is updated
         while self._proceed:
-            self.data_in.updated.wait()
-            self.data_in.updated.clear()
+            self.buffer_in.updated.wait()
+            self.buffer_in.updated.clear()
             self._count += 1
             if self._count == self._update_interval:
-                data = self.data_in.unstructured
+                data = self.buffer_in.unstructured
                 timestamps, samples = data[:, 1], data[:, 1:]
                 filtered = mne.filter.filter_data(samples.T, self._sfreq,
                                                   *self._band)
-                #samples_mne = self._to_mne_array(samples)
-                #filtered_mne = samples_mne.filter(*self._band)
-                #filtered = self._from_mne_array(filtered_mne)
-                self.data_out.update(timestamps, filtered.T)
+                # samples_mne = self._to_mne_array(samples)
+                # filtered_mne = samples_mne.filter(*self._band)
+                # filtered = self._from_mne_array(filtered_mne)
+                self.buffer_out.update(timestamps, filtered.T)
                 self._count = 0
 
     def stop(self):

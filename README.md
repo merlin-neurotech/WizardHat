@@ -1,13 +1,23 @@
 # WizardHat 
 ![logo](https://github.com/merlin-neurotech/WizardHat/blob/master/WizardHatLogoSmall.jpg)
 
-WizardHat is a library for the streaming and handling of EEG data from consumer-grade devices using the Lab Streaming Layer (LSL) protocol. WizardHat's prupose is to enable users and especially first timers to flexibly build brain-computer interfaces (BCIs) without the fuss of configuring a streaming environment. WizardHat was built by Merlin Neurotech at Queen's University. Currently, WizardHat supports the Muse (2016) brain-sensing headband and runs on Python 3.6. WizardHat is easy to use and only requires three lines of code to get started. WizardHat's framework enables streaming, manipulation, and visualization of online EEG data. 
+WizardHat is a library for the streaming and handling of EEG data from consumer-grade devices using the Lab Streaming Layer (LSL) protocol. WizardHat's prupose is to enable users and especially first timers to flexibly build brain-computer interfaces (BCIs) without the fuss of configuring a streaming environment. WizardHat was built by Merlin Neurotech at Queen's University. Currently, WizardHat supports the Muse (2016) brain-sensing headband, the OpenBCI Ganglion, and runs on Python 3.6. WizardHat is easy to use and only requires three lines of code to get started. WizardHat's framework enables streaming, manipulation, and visualization of online EEG data.
 
-For first time python users, please refer to our [beginner's guide](https://docs.google.com/document/d/1q9CNgSgUsNCRasLZtZ7D-2JpB7OcNvSsS3X1a1zHK-U/edit?usp=sharing) on how to set install everything from scratch. WizardHat's documentation can be found [here](https://docs.google.com/document/d/1dOymsVdVxN3SgN3mRIzHV1xmjpIjEvz5QSDIQ66D6To/edit?usp=sharing).
+For first time python users, please refer to our [beginner's guide](https://docs.google.com/document/d/1q9CNgSgUsNCRasLZtZ7D-2JpB7OcNvSsS3X1a1zHK-U/edit?usp=sharing) on how to install everything from scratch. WizardHat's documentation can be found [here](https://docs.google.com/document/d/1dOymsVdVxN3SgN3mRIzHV1xmjpIjEvz5QSDIQ66D6To/edit?usp=sharing).
+
+## Note : Active Development
+Our dedicated team at Merlin Neurotech is continously working to improve WizardHat and add new functionality.
+Current on-going projects:
+- Frequency Spectrum Data Class
+- MNE Library Compatibility
+- Implementing simple filters
+- Power spectrum transformer
+
+Check back soon if the feature you are looking for is under development!
 
 ## Getting Started
 
-To set up WizardHat, begin by cloning this repository on your local environment. Once cloned, ensure you are in a new virtual environment and download the required depencies.
+To set up WizardHat, begin by cloning this repository on your local environment. Once cloned, ensure you are in a new virtual environment and download the required dependencies.
 
 	pip install -r requirements.txt
 
@@ -28,29 +38,29 @@ Our library provides two options when building, debugging, or testing your BCI c
 1) Streaming data from Muse or other EEG device
 2) Streaming randomly generated data for testing and debugging
 
-To begin streaming, you will need first to import `ble2lsl` and `wizardhat.acquire` into your Python workspace. The BLE device parameters for different devices (currently, only Muse 2016) are stored in respective modules in `ble2lsl.devices`.
-        
+To begin streaming, you will need first to import `ble2lsl` and `wizardhat.acquire` into your Python workspace. The BLE device parameters for different devices are stored in respective modules in `ble2lsl.devices`.
+
 	import ble2lsl
 	from ble2lsl.devices import muse2016
 	from wizardhat import acquire
 
-You then need to create a streaming outlet which establishes a bluetooth connection with the EEG device:
+You then need to create a streaming outlet which establishes a Bluetooth connection with the EEG device:
 
-	outlet = ble2lsl.BLEStreamer.from_device(muse2016)
+	streamer = ble2lsl.Streamer(muse2016)
 
-To stream dummy data through an outlet that mimics (number of channels, sample rate, and metadata) the Muse 2016 
+To stream dummy data through an outlet that mimics (number of channels, sample rate, and metadata) the Muse 2016
 
-	dummy_outlet = ble2lsl.DummyStreamer(muse2016)
+	dummy_streamer = ble2lsl.Dummy(muse2016)
 
 Next, to store and record the data, add the following line to capture the outlet stream:
 
-	streamer = acquire.LSLStreamer()
+	receiver = acquire.Receiver()
 
 Notice how you do not need to pass the outlet streamer as an argument to this function. LSL can stream over a local network, and `ble2lsl` need not be run in the same process as `wizardhat`. LSLStreamer automatically finds and connects to the LSL outlet. (More work is needed to allow LSLStreamer to distinguish multiple outlets, when they are available.)
 
 Now that your streamer is is receiving data, you are able to visualize and manipulate it online. The data object is a structured array with timestamps as the first column, and EEG channel data values as the following columns. It contains both raw values and metadata regarding the device in use. The current copy of the stored data is in
 
-	streamer_inlet.data.data
+	streamer.buffers["EEG"].data
 
 After each time window, data is saved to a CSV file in your directory under a folder called 'data' and is constantly updated while your stream is running. Each new streaming session (specifically, data object) you establish will create a new CSV file, accompanied by a JSON file of the same named containing the stream metadata.
 
@@ -59,11 +69,11 @@ These are the basics of WizardHat; to learn how to transform, filter, and visual
 To gain a deeper understanding into how our framework operates, take a look under the hood.
 
 ## Authors
-Matt Laporte, 
+Matt Laporte,
 Ben Cuthbert,
 Omri Nachmani
 
-## Contributors 
+## Contributors
 Abigail,
 Jorge,
 Dan,
@@ -72,5 +82,5 @@ Teghan,
 Chris,
 Hamada
 
-## Acknowledgements 
-This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are derived or informed (particularly ble2lsl, wizardhat.plot, and some of wizardhat.acquire). When we first got started with the Muse, we were inspired to modify his work to fit our needs. We wanted to generalize his work into an API for the sake of modularity and flexibility, so that it might be as broadly useful as possible to those doing BCI- and EEG-related work.
+## Acknowledgements
+This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are derived or informed (particularly `ble2lsl` and some of `wizardhat.acquire`). The device specification for the OpenBCI Ganglion is largely derived from [OpenBCI_Python](https://github.com/OpenBCI/OpenBCI_Python).

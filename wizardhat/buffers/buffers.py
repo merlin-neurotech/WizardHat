@@ -1,14 +1,19 @@
 """Objects for data storage.
 
 All instantiable classes in this module are subclasses of the abstract class
-`Data`, which enforces a common interface to its children. However, it imposes
+`Buffer`, which enforces a common interface to its children. However, it imposes
 no constraints on the structure of the stored data. Thus, storage in any kind
 of data structure may be implemented in a subclass, so long as the appropriate
 interface methods are defined in that subclass.
+
+TODO:
+    * Support for commonly-used data formats; HDF5 for longer recordings. XDF?
+      MessagePack. JSON.
 """
 
 import wizardhat.utils as utils
 
+import atexit
 import datetime
 import json
 import os
@@ -17,18 +22,18 @@ import threading
 import numpy as np
 
 
-class Data:
+class Buffer:
     """Abstract base class of data management classes.
 
     Provides management of instance-related filenames and pipeline metadata for
     subclasses. Pipeline metadata consists of a field in the `metadata`
-    attribute which tracks the `Data` and `transform.Transformer` subclasses
+    attribute which tracks the `Buffer` and `transform.Transformer` subclasses
     through which the data has flowed. Complete instance metadata is written
     to a `.json` file with the same name as the instance's data file (minus
     its extension). Therefore, each data file corresponds to a `.json` file
     that describes how the data was generated.
 
-    As an abstract class, `Data` should not be instantiated directly, but must
+    As an abstract class, `Buffer` should not be instantiated directly, but must
     be subclassed (e.g. `TimeSeries`). Subclasses should conform to expected
     behaviour by overriding methods or properties that raise
     `NotImplementedError`; though `data` need not be overrided so long as the
@@ -62,11 +67,11 @@ class Data:
         metadata (dict): All metadata included in instance's `.json`.
 
     Todo:
-        * Implement with abc.ABC (prevent instantiation of Data itself)
+        * Implement with abc.ABC (prevent instantiation of Buffer itself)
         * Detailed pipeline metadata: not only class names but attribute values
         * Decorator for locked methods
         * Is update really part of interface (Transformer expecting one type of
-          Data will fail if it tries to update another, probably)
+          Buffer will fail if it tries to update another, probably)
     """
 
     def __init__(self, metadata=None, filename=None, data_dir='./data',
@@ -187,7 +192,7 @@ class Data:
         return utils.deepcopy_mask(self, memo, mask)
 
 
-class TimeSeries(Data):
+class TimeSeries(Buffer):
     """Manages 2D time series data: rows of samples indexed in order of time.
 
     Data is stored in a NumPy structured array where `'time'` is the first
@@ -197,7 +202,6 @@ class TimeSeries(Data):
 
     TODO:
         * Warning (error?) when timestamps are out of order
-        * Record to disk on stopping
     """
 
     def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
@@ -217,7 +221,7 @@ class TimeSeries(Data):
                 be Python base types (e.g. `float`) or NumPy base dtypes
                ( e.g. `np.float64`).
         """
-        Data.__init__(self, **kwargs)
+        Buffer.__init__(self, **kwargs)
 
         if str(channel_fmt) == channel_fmt:  # quack
             channel_fmt = [channel_fmt] * len(ch_names)
@@ -228,6 +232,9 @@ class TimeSeries(Data):
             raise ValueError("Number of formats must match number of channels")
 
         self._record = record
+        # write remaining data to file on program exit (e.g. quit())
+        if record:
+            atexit.register(self.write_to_file)
 
         self.initialize(int(n_samples))
 
@@ -274,34 +281,48 @@ class TimeSeries(Data):
                 Data type(s) in `Iterable` correspond to the type(s) specified
                 in `dtype`.
         """
-        new = self._format_samples(timestamps, samples)
-
-        self._count -= len(new)
-        cutoff = len(new) + self._count
-        self._append(new[:cutoff])
-        if self._count < 1:
-            if self._record:
-                self._write_to_file()
-            self._append(new[cutoff:])
-            self._count = self.n_samples
-
+        self._new = self._format_samples(timestamps, samples)
+        self._split_append(self._new)
         self.updated.set()
+
+    def write_to_file(self, force=False):
+        """Write any unwritten samples to file.
+
+        Args:
+            force (bool): If `True`, forces writing of remaining samples
+                regardless of the value of `record` passed at instantiation.
+        """
+        if self._record or force:
+            with self._lock:
+                with open(self.filename + ".csv", 'a') as f:
+                    for row in self._data[max(0, self._count):]:
+                        line = ','.join(str(n) for n in row)
+                        f.write(line + '\n')
+        self._count = self.n_samples
+
+    def _split_append(self, new):
+        # write out each time array contains only unwritten samples
+        # however, last chunk added may push out some unwritten samples
+        # therefore split appends before and after write_to_file
+        cutoff = self._count
+        self._append(new[:cutoff])
+        if self._count == 0:
+            self.write_to_file()
+            self._append(new[cutoff:])
 
     def _append(self, new):
         with self._lock:
             self._data = utils.push_rows(self._data, new)
-
-    def _write_to_file(self):
-        with self._lock:
-            with open(self.filename + ".csv", 'a') as f:
-                for row in self._data:
-                    line = ','.join(str(n) for n in row)
-                    f.write(line + '\n')
+        self._count -= len(new)
 
     def _format_samples(self, timestamps, samples):
         """Format data `numpy.ndarray` from timestamps and samples."""
         stacked = [(t,) + tuple(s) for t, s in zip(timestamps, samples)]
-        return np.array(stacked, dtype=self._dtype)
+        try:
+            stacked_ = np.array(stacked, dtype=self._dtype)
+        except ValueError:
+            raise ValueError(str(stacked))
+        return stacked_
 
     @property
     def n_samples(self):
@@ -335,7 +356,11 @@ class TimeSeries(Data):
             return np.copy(self._data['time'])
 
     @property
-    def last(self):
+    def last_samples(self):
+        return np.copy(self._new)
+
+    @property
+    def last_sample(self):
         """Last-stored row (timestamp and sample)."""
         with self._lock:
             return np.copy(self._data[-1])

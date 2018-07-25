@@ -27,7 +27,6 @@ wheels/
 
 # Data folder
 data/
-!wizardhat/data
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -152,3 +151,7 @@ flycheck_*.el
 
 # directory configuration
 .dir-locals.el
+
+# vscode settings
+.vscode/settings.json
+.vscode/launch.json

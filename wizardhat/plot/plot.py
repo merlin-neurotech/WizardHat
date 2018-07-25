@@ -1,187 +1,152 @@
-"""Plotting of data in `data.Data` objects."""
+"""Plotting of data in `buffers.Buffer` objects.
 
-from wizardhat.plot import shaders
+Rough implementation of a standalone bokeh server.
 
-from itertools import cycle
-import math
+Currently just grabs the most recent sample from Buffers.buffer every time the
+periodic callback executes. This is probably not the best way to do it, because
+the sampling rate is arbitrarily based on the value for
+`add_periodic_callback()`. For example, you can set the callback time to
+something faster than the sampling rate and you'll see that each value in
+`buffer.data` gets sampled a few times (starts to look like a step
+function). Right now there's no good way to check that we're not dropping
+samples when updating.
 
-import numpy as np
-from seaborn import color_palette
-from vispy import gloo, app, visuals
+Also just two manually retrieved channels for now as a proof of concept, but
+the gridplot method seems to work well for this.
+
+TODO:
+    * Figure out sampling method- possibly using Data's self.updated attribute
+        to trigger an update? Maybe we can update everything "in-place" because
+        buffer.data already has a built-in window..
+    * Automatically determine device name/set to title?
+"""
+
+from functools import partial
+from threading import Thread
+
+from bokeh.layouts import row,gridplot, widgetbox
+from bokeh.models.widgets import Button, RadioButtonGroup
+from bokeh.models import ColumnDataSource
+from bokeh.palettes import all_palettes as palettes
+from bokeh.plotting import figure
+from bokeh.server.server import Server
+from tornado import gen
+import time
 
 
-class Plotter(app.Canvas):
+class Plotter():
     """Base class for plotting."""
-    def __init__(self, data, plot_params=None):
+
+    def __init__(self, buffer, autostart=True):
         """Construct a `Plotter` instance.
 
         Args:
-            data (data.Data): Data object managing data to be plotted.
+            buffer (buffers.Buffer): Data object managing data to be plotted.
             plot_params (dict): Plot display parameters.
         """
-        app.Canvas.__init__(self, keys='interactive')
-        self.data = data
+        self.buffer = buffer
+        # output_file('WizardHat Plotter.html')
+        self.server = Server({'/': self._app_manager})
+        #self.add_widgets()
+        self.autostart = autostart
+
+    def add_widgets(self):
+        self.stream_option = RadioButtonGroup(labels=['EEG', 'ACC', 'GYR'], active=0)
+        self.filter_option = RadioButtonGroup(labels=['Low Pass', 'High Pass', 'Band Pass'], active=0)
+        self.widget_box = widgetbox(self.stream_option,
+                                    self.filter_option,
+                                    width=300)
+
+    def run_server(self):
+        self.server.start()
+        self.server.io_loop.add_callback(self.server.show, '/')
+        self._update_thread.start()
+        self.server.io_loop.start()
+
+    def _app_manager(self, curdoc):
+        self._curdoc = curdoc
+        self._set_layout()
+        self._set_callbacks()
+
+    def _set_callbacks(self):
+        #self._curdoc.add_root(row(self.widget_box,
+        #                          gridplot(self.plots, toolbar_location="left",
+        #                                   plot_width=1000)))
+        self._curdoc.add_root(gridplot(self.plots, toolbar_location="left",
+                                       plot_width=1000))
+        self._curdoc.title = "WizardHat"
 
 
 class Lines(Plotter):
     """Multiple (stacked) line plots.
 
-    Expects a two-dimensional `data.Data` object (such as `TimeSeries`) where
+    Expects a two-dimensional `buffers.Buffer` object (such as `TimeSeries`) where
     all columns after the first give the data used to plot individual lines.
-
     Multiple data sources may be given in a list, assuming they have the same
     form (number of channels and rows/samples); the user can cycle between
     plots of each data source with the 'D' key.
     """
-    def __init__(self, data, plot_params=None, **kwargs):
-        """Construct a `Lines` instance.
 
+    def __init__(self, buffer, n_samples=5000, palette='Category10',
+                 bgcolor="white", **kwargs):
+        """Construct a `Lines` instance.
         Args:
-            data (data.Data or List[data.Data]): Data object(s) managing data
+            buffer (buffers.Buffer or List[buffers.Buffer]): Objects with data
                 to be plotted. Multiple objects may be passed in a list, in
                 which case the plot can cycle through plotting the data in
                 each object by pressing 'd'. However, all data objects passed
                 should have a similar form (e.g. `TimeSeries` with same number
                 of rows/samples and channels).
-
             plot_params (dict): Plot display parameters.
         """
-        super().__init__(data, plot_params=plot_params, **kwargs)
 
-        try:
-            self.data.ch_names
-            self.data = [self.data]
-        except AttributeError:
-            pass
+        super().__init__(buffer, **kwargs)
 
-        self._cycle = cycle(range(len(self.data)))
-        self._data = self.data[next(self._cycle)]
+        # TODO: initialize with existing samples in self.buffer.data
+        data_dict = {name: []  # [self.buffer.data[name][:n_samples]]
+                     for name in self.buffer.dtype.names}
+        self._source = ColumnDataSource(data_dict)
+        self._update_thread = Thread(target=self._get_new_samples)
+        self._n_samples = n_samples
 
-        self._n_lines = self._data.n_chan
-        self._n_points = self._data.n_samples
+        self._colors = palettes[palette][len(self.buffer.ch_names)]
+        self._bgcolor = bgcolor
 
-        # plotting parameters (color, font size, etc.)
-        if plot_params is None:
-            plot_params = {}
-        try:
-            self.params = dict(
-                title='Plotter',
-                font_size=48,
-                scale=500,
-                palette=color_palette("RdBu_r", self._n_lines),
-                quality_palette=color_palette("RdYlGn", 11)[::-1],
-            )
-            self.params.update(plot_params)
-        except TypeError:
-            raise TypeError("plot_params not a dict or key-value pairs list")
+        if self.autostart:
+            self.run_server()
 
-        color = np.repeat(self.params['palette'],
-                          self._n_points, axis=0).astype(np.float32)
+    def _set_layout(self):
+        self.plots = []
+        for i, ch in enumerate(self.buffer.ch_names):
+            p = figure(plot_height=100,
+                       tools="xpan,xwheel_zoom,xbox_zoom,reset",
+                       x_axis_type='datetime', y_axis_location="right")#,y_range=(-10,10))
+            p.x_range.follow = "end"  # always follows new data in source
+            p.x_range.follow_interval = 5  # in s
+            p.x_range.range_padding = 0  # we can play with this stuff
+            p.yaxis.axis_label = ch
+            p.background_fill_color = self._bgcolor
+            # p.background_fill_alpha = 0.5
+            p.line(x='time', y=ch, alpha=0.8, line_width=2,
+                   color=self._colors[i], source=self._source)
+            self.plots.append([p])
 
-        self._set_program_params(color)
 
-        # text
-        self._names = [visuals.TextVisual(ch_name, bold=True, color='white')
-                       for ch_name in self._data.ch_names]
-        self._quality = [visuals.TextVisual('', bold=True, color='white')
-                         for ch_name in self._data.ch_names]
+    @gen.coroutine
+    def _update(self, data_dict):
+        self._source.stream(data_dict, self._n_samples)
 
-        self._init_plot()
-
-    def _set_program_params(self, color):
-
-        # Signal 2D index of each vertex (row and col) and x-index (sample
-        # index within each signal).
-        index = np.c_[np.repeat(np.repeat(np.arange(1), self._n_lines),
-                                self._n_points),
-                      np.repeat(np.tile(np.arange(self._n_lines), 1),
-                                self._n_points),
-                      np.tile(np.arange(self._n_points),
-                              self._n_lines)].astype(np.float32)
-
-        position = np.zeros((self._n_lines,
-                             self._n_points)).astype(np.float32).reshape(-1, 1)
-
-        self.program = gloo.Program(shaders.VERT_SHADER, shaders.FRAG_SHADER)
-        self.program['a_position'] = position
-        self.program['a_color'] = color
-        self.program['a_index'] = index
-        self.program['u_scale'] = (1., 1.)
-        self.program['u_size'] = (self._n_lines, 1)
-        self.program['u_n'] = self._n_points
-
-    def _init_plot(self):
-        self._timer = app.Timer('auto', connect=self.update_plot, start=True)
-        gloo.set_viewport(0, 0, *self.physical_size)
-        gloo.set_state(clear_color='black', blend=True,
-                       blend_func=('src_alpha', 'one_minus_src_alpha'))
-
-        self.show()
-
-    def on_key_press(self, event):
-        # cycle through available data sources
-        if event.key.name == 'D':
-            self._data = self.data[next(self._cycle)]
-
-        # time scale
-        if event.key.name in ['+', '-']:
-            if event.key.name == '+':
-                dx = -0.05
-            else:
-                dx = 0.05
-            scale_x, scale_y = self.program['u_scale']
-            scale_x_new, scale_y_new = (scale_x * math.exp(1.0*dx),
-                                        scale_y * math.exp(0.0*dx))
-            self.program['u_scale'] = (max(1, scale_x_new),
-                                       max(1, scale_y_new))
-            self.update()
-
-    def on_mouse_wheel(self, event):
-        dx = np.sign(event.delta[1]) * .05
-        scale_x, scale_y = self.program['u_scale']
-        scale_x_new, scale_y_new = (scale_x * math.exp(0.0*dx),
-                                    scale_y * math.exp(2.0*dx))
-        self.program['u_scale'] = (max(1, scale_x_new), max(0.01, scale_y_new))
-        self.update()
-
-    def update_plot(self, data):
-        plot_data = self._data.unstructured[:, 1:]
-        plot_data = (plot_data - plot_data.mean(axis=0)) / self.params['scale']
-        sd = np.std(plot_data[-int(256):], axis=0)[::-1]
-        #sd = np.std(plot_data[-int(self._data.sfreq):], axis=0)[::-1]
-        sd *= self.params['scale']
-        co = np.int32(np.tanh((sd - 30) / 15)*5 + 5)
-
-        for l in range(self._n_lines):
-            self._quality[l].text = '%.2f' % (sd[l])
-            self._quality[l].color = self.params['quality_palette'][co[l]]
-            self._quality[l].font_size = 12 + co[l]
-
-            self._names[l].font_size = 12 + co[l]
-            self._names[l].color = self.params['quality_palette'][co[l]]
-
-        plot_data = plot_data.T.ravel().astype(np.float32)
-        self.program['a_position'].set_data(plot_data)
-        self.update()
-
-    def on_resize(self, event):
-        # Set canvas viewport and reconfigure visual transforms to match.
-        vp = (0, 0, self.physical_size[0], self.physical_size[1])
-        self.context.set_viewport(*vp)
-
-        for l, t in enumerate(self._names):
-            t.transforms.configure(canvas=self, viewport=vp)
-            t.pos = (self.size[0] * 0.025,
-                     ((l + 0.5)/self._n_lines) * self.size[1])
-
-        for l, t in enumerate(self._quality):
-            t.transforms.configure(canvas=self, viewport=vp)
-            t.pos = (self.size[0] * 0.975,
-                     ((l + 0.5)/self._n_lines) * self.size[1])
-
-    def on_draw(self, event):
-        gloo.clear()
-        gloo.set_viewport(0, 0, *self.physical_size)
-        self.program.draw('line_strip')
-        for t in self._names + self._quality:
-            t.draw()
+    def _get_new_samples(self):
+        #TODO Time delay of 1 second is necessary because there seems to be plotting issue related to server booting
+        #time delay allows the server to boot before samples get sent to it.
+        time.sleep(1)
+        while True:
+            self.buffer.updated.wait()
+            data_dict = {name: self.buffer.last_samples[name]
+                         for name in self.buffer.dtype.names}
+            try:  # don't freak out if IOLoop
+                self._curdoc.add_next_tick_callback(partial(self._update,
+                                                            data_dict))
+            except AttributeError:
+                pass
+            self.buffer.updated.clear()
