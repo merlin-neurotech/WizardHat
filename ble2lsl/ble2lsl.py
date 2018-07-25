@@ -61,11 +61,7 @@ class BaseStreamer:
         """
         self._device = device
         if subscriptions is None:
-            # look for default list; if unavailable, subscribe to all
-            try:
-                subscriptions = device.DEFAULT_SUBSCRIPTIONS
-            except AttributeError:
-                subscriptions = device.STREAMS
+            subscriptions = get_default_subscriptions(device)
         self._subscriptions = tuple(subscriptions)
         self._time_func = time_func
         self._user_ch_names = ch_names if ch_names is not None else {}
@@ -364,7 +360,8 @@ class Dummy(BaseStreamer):
         * verify timestamps/delays (seems too fast in plot.Lines)
     """
 
-    def __init__(self, device, chunk_iterator=None, autostart=True, **kwargs):
+    def __init__(self, device, chunk_iterator=None, subscriptions=None,
+                 autostart=True, **kwargs):
         """Construct a `Dummy` instance.
 
         Args:
@@ -372,14 +369,18 @@ class Dummy(BaseStreamer):
             chunk_iterator (generator): Class that iterates through chunks.
             autostart (bool): Whether to start streaming on instantiation.
         """
-        BaseStreamer.__init__(self, device=device, **kwargs)
+        nominal_srate = device.PARAMS["streams"]["nominal_srate"]
+        if subscriptions is None:
+            subscriptions = get_default_subscriptions(device)
+        subscriptions = {name for name in subscriptions
+                         if nominal_srate[name] > 0}
+
+        BaseStreamer.__init__(self, device=device, subscriptions=subscriptions,
+                              **kwargs)
 
         self._address = "DUMMY"
         self._init_lsl_outlets()
 
-        nominal_srate = self._stream_params["nominal_srate"]
-        self._subscriptions = {name for name in self._subscriptions
-                               if nominal_srate[name] > 0}
         chunk_shapes = {name: self._chunks[name].shape
                         for name in self._subscriptions}
         self._delays = {name: 1 / (nominal_srate[name] / chunk_shapes[name][1])
@@ -450,6 +451,15 @@ def empty_chunks(stream_params, subscriptions):
     return chunks
 
 
+def get_default_subscriptions(device):
+    # look for default list; if unavailable, subscribe to all
+    try:
+        subscriptions = device.DEFAULT_SUBSCRIPTIONS
+    except AttributeError:
+        subscriptions = device.STREAMS
+    return subscriptions
+
+
 class ChunkIterator:
     """Generator object (i.e. iterator) that yields chunks.
 
@@ -470,6 +480,7 @@ class NoisySinusoids(ChunkIterator):
         self._speriod = 1 / self._srate
         self._chunk_t_incr = (1 + chunk_shape[0]) / self._srate
         self._freq_amps = np.random.randint(1, 5, len(freqs))
+        self._noise_std = noise_std
 
     def __iter__(self):
         self._t = (np.arange(self._chunk_shape[0]).reshape((-1, 1))
@@ -478,7 +489,7 @@ class NoisySinusoids(ChunkIterator):
 
     def __next__(self):
         # start with noise
-        chunk = np.random.normal(0, noise_std, self._chunk_shape)
+        chunk = np.random.normal(0, self._noise_std, self._chunk_shape)
 
         # sum frequencies with random amplitudes
         for i, freq in enumerate(self._ang_freqs):
