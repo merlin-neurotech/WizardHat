@@ -7,7 +7,7 @@ from wizardhat import acquire, plot
 
 import pylsl as lsl
 
-device = ganglion
+device = muse2016
 plot_stream = 'EEG'
 
 if __name__ == '__main__':

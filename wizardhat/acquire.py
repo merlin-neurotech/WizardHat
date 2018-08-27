@@ -71,6 +71,7 @@ class Receiver:
             kwargs: Additional keyword arguments to default `buffers.TimeSeries`.
 
         """
+
         streams = get_lsl_streams()
         source_ids = list(streams.keys())
 
@@ -214,7 +215,7 @@ def get_lsl_streams():
                                     'accelerometer': <pylsl.pylsl.StreamInfo>}}
     """
     streams = [(stream.source_id(), stream.type(), stream)
-               for stream in lsl.resolve_streams()]
+               for stream in lsl.resolve_streams(wait_time=2)]
     streams_dict = streams_dict_from_streams(streams)
     return streams_dict
 
