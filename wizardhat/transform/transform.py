@@ -11,7 +11,7 @@ import threading
 
 import mne
 import numpy as np
-
+import time
 
 class Transformer(threading.Thread):
     """Base class for transforming data stored in `Buffer` objects.
@@ -133,3 +133,40 @@ class MNEFilter(MNETransformer):
 
     def stop(self):
         self._proceed = False
+
+class PSD(Transformer):
+    def __init__(self,buffer_in,sfreq=256,window=1):
+        self.buffer = buffer_in
+        self.sfreq = sfreq
+        self.n_samples = window*self.sfreq
+        self.n_channels = len(buffer_in.ch_names)
+        self.w = np.hamming(self.n_samples)
+        self._get_nfft()
+        self.run()
+
+    def run(self):
+        ##TODO Get the data sampler to run only every 1 second or 256 samples
+        ##TODO Send PSD to a FrequencySeries object
+        while True:
+            self.buffer.updated.wait()
+            data_in = self.buffer.unstructured[-self.n_samples:,1:5]
+            psd = self._get_power_spectrum(data_in)
+            print(psd.shape)
+            break
+    def _get_nfft(self):
+        n=1
+        while n < self.n_samples:
+            n*=2
+        self.nfft = n
+
+    def _get_hamming_window(self,data_in):
+        data_win_centred = data_in - np.mean(data_in, axis = 0)
+        data_hamming_window = (data_win_centred.T*self.w).T
+        return data_hamming_window
+    
+
+    def _get_power_spectrum(self,data_in):
+        data_hamming_window = self._get_hamming_window(data_in)
+        data_fft = np.fft.fft(data_hamming_window, n=self.nfft, axis=0)/self.n_samples
+        psd = 2*np.abs(data_fft[0:int(self.nfft/2),:])
+        return psd
