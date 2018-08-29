@@ -410,17 +410,17 @@ class Spectra(TimeSeries):
         if values_dtype is None:
             values_dtype = np.float64
 
-        try:
-            if not sorted(indep_range) == list(indep_range):
-                raise TypeError
-        except TypeError:
-            raise TypeError("indep_range not a monotonic increasing sequence")
+        #try:
+        #    if not sorted(indep_range) == list(indep_range):
+        #        raise TypeError
+        #except TypeError:
+        #    raise TypeError("indep_range not a monotonic increasing sequence")
 
         super().__init__(ch_names=ch_names,
                          channel_fmt=(values_dtype, len(indep_range)),
                          **kwargs)
 
-        self._range = np.array(indep_range)
+        self._range = indep_range
         self._indep_name = indep_name
 
     def update(self, timestamp, spectra):
