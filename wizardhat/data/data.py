@@ -10,10 +10,10 @@ interface methods are defined in that subclass.
 import wizardhat.utils as utils
 
 import atexit
-import datetime
 import json
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -164,12 +164,13 @@ class Data:
             f.write(metadata_json)
 
     def _new_filename(self, data_dir='data', label=''):
-        date = datetime.date.today().isoformat()
+        time_str = time.strftime("%y%m%d-%H%M%S", time.localtime())
         classname = type(self).__name__
         if label:
             label += '_'
 
-        filename = '{}/{}_{}_{}{{}}'.format(data_dir, date, classname, label)
+        filename = '{}/{}_{}_{}{{}}'.format(data_dir, time_str,
+                                            classname, label)
         # incremental counter to prevent overwrites
         # (based on existence of metadata file)
         count = 0
@@ -221,8 +222,13 @@ class TimeSeries(Data):
         """
         Data.__init__(self, **kwargs)
 
-        if str(channel_fmt) == channel_fmt:  # quack
+        # if single dtype given, expand to number of channels
+        try:
+            np.dtype(channel_fmt)
             channel_fmt = [channel_fmt] * len(ch_names)
+        except TypeError:
+            pass
+
         try:
             self._dtype = np.dtype({'names': ["time"] + list(ch_names),
                                     'formats': [np.float64] + list(channel_fmt)
@@ -363,15 +369,20 @@ class TimeSeries(Data):
 class Spectra(TimeSeries):
     """Manages a time series of spectral (e.g. frequency-domain) data.
 
+    This is a constrained subclass of `TimeSeries`. Spectral data may be
+    stored for multiple channels, but all channels will share the same
+    spectral range (the `range` property).
+
     TODO:
         * What do timestamps mean here? Transformer-dependent?
     """
 
-    def __init__(self, indep_range, indep_name="Frequency", values_dtype=None,
-                 **kwargs):
+    def __init__(self, ch_names, indep_range, indep_name="Frequency",
+                 values_dtype=None, **kwargs):
         """Create a new `Spectra` object.
 
         Args:
+            ch_names (List[str]): List of channel names.
             indep_range (Iterable): Values of the independent variable.
             n_samples (int): Number of spectra updates to keep.
             indep_name (str): Name of the independent variable.
@@ -388,28 +399,32 @@ class Spectra(TimeSeries):
         except TypeError:
             raise TypeError("indep_range not a monotonic increasing sequence")
 
-        super().__init__(ch_names=["values"],
-                         channel_fmt=[(values_dtype, len(indep_range))],
+        super().__init__(ch_names=ch_names,
+                         channel_fmt=(values_dtype, len(indep_range)),
                          **kwargs)
 
         self._range = np.array(indep_range)
         self._indep_name = indep_name
 
-    def update(self, timestamp, spectrum):
+    def update(self, timestamp, spectra):
         """Append a spectrum to stored data.
 
         Args:
-            timestamp (np.float64): Timestamp for the spectrum.
-            spectrum (Iterable): Spectrum values.
+            timestamp (np.float64): Timestamp for the current spectra.
+            spectrum: Spectra for each of the channels.
+                Should be a 2D iterable structure (e.g. list of lists, or
+                `np.ndarray`) where the first dimension corresponds to channels
+                and the second to the spectrum range.
 
         TODO:
             * May be able to remove this method if `TimeSeries` update method
               appends based on channel data type (see `TimeSeries` TODOs)
         """
         try:
-            super(Spectra, self).update([timestamp], [[spectrum]])
+            super(Spectra, self).update([timestamp], [spectra])
         except ValueError:
-            raise ValueError("cannot update with spectrum of incorrect length")
+            msg = "cannot update with spectra of incorrect/inconsistent length"
+            raise ValueError(msg)
 
     @property
     def range(self):
