@@ -14,10 +14,10 @@ TODO:
 import wizardhat.utils as utils
 
 import atexit
-import datetime
 import json
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -122,13 +122,8 @@ class Buffer:
 
     @property
     def unstructured(self):
-        """Return structured as regular `np.ndarray`.
-
-        TODO:
-            * dtype (np.float64?) based on context
-            * ValueError if self._data is not structured?
-        """
-        return self.data.view((np.float64, self.n_chan + 1))
+        """Return structured data as regular `np.ndarray`."""
+        raise NotImplementedError()
 
     @property
     def dtype(self):
@@ -168,12 +163,13 @@ class Buffer:
             f.write(metadata_json)
 
     def _new_filename(self, data_dir='data', label=''):
-        date = datetime.date.today().isoformat()
+        time_str = time.strftime("%y%m%d-%H%M%S", time.localtime())
         classname = type(self).__name__
         if label:
             label += '_'
 
-        filename = '{}/{}_{}_{}{{}}'.format(data_dir, date, classname, label)
+        filename = '{}/{}_{}_{}{{}}'.format(data_dir, time_str,
+                                            classname, label)
         # incremental counter to prevent overwrites
         # (based on existence of metadata file)
         count = 0
@@ -202,6 +198,8 @@ class TimeSeries(Buffer):
 
     TODO:
         * Warning (error?) when timestamps are out of order
+        * Per-channel units?
+        * _format_samples based on dtype, e.g. for array-valued channels
     """
 
     def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
@@ -223,11 +221,17 @@ class TimeSeries(Buffer):
         """
         Buffer.__init__(self, **kwargs)
 
-        if str(channel_fmt) == channel_fmt:  # quack
-            channel_fmt = [channel_fmt] * len(ch_names)
+        # if single dtype given, expand to number of channels
         try:
-            self._dtype = np.dtype({'names': ["time"] + ch_names,
-                                    'formats': [np.float64] + channel_fmt})
+            np.dtype(channel_fmt)
+            channel_fmt = [channel_fmt] * len(ch_names)
+        except TypeError:
+            pass
+
+        try:
+            self._dtype = np.dtype({'names': ["time"] + list(ch_names),
+                                    'formats': [np.float64] + list(channel_fmt)
+                                    })
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
@@ -280,6 +284,9 @@ class TimeSeries(Buffer):
             samples (Iterable): Channel data.
                 Data type(s) in `Iterable` correspond to the type(s) specified
                 in `dtype`.
+
+        TODO:
+            * Sort timestamps/warn if unsorted?
         """
         self._new = self._format_samples(timestamps, samples)
         self._split_append(self._new)
@@ -350,6 +357,16 @@ class TimeSeries(Buffer):
             return np.copy(self._data[list(self.ch_names)])
 
     @property
+    def unstructured(self):
+        """Return unstructured copy of channel data, without timestamps."""
+        samples = self.samples
+        try:
+            return samples.view((samples.dtype[0], self.n_chan))
+        except ValueError:
+            raise ValueError("Cannot return unstructured data for " +
+                             "channels with different datatypes/sample shapes")
+
+    @property
     def timestamps(self):
         """Return copy of timestamps."""
         with self._lock:
@@ -364,3 +381,72 @@ class TimeSeries(Buffer):
         """Last-stored row (timestamp and sample)."""
         with self._lock:
             return np.copy(self._data[-1])
+
+
+class Spectra(TimeSeries):
+    """Manages a time series of spectral (e.g. frequency-domain) data.
+
+    This is a constrained subclass of `TimeSeries`. Spectral data may be
+    stored for multiple channels, but all channels will share the same
+    spectral range (the `range` property).
+
+    TODO:
+        * What do timestamps mean here? Transformer-dependent?
+    """
+
+    def __init__(self, ch_names, indep_range, indep_name="Frequency",
+                 values_dtype=None, **kwargs):
+        """Create a new `Spectra` object.
+
+        Args:
+            ch_names (List[str]): List of channel names.
+            indep_range (Iterable): Values of the independent variable.
+            n_samples (int): Number of spectra updates to keep.
+            indep_name (str): Name of the independent variable.
+                Default: `"freq"`.
+            values_dtype (type or np.dtype): Spectrum datatype.
+                Default: `np.float64`.
+        """
+        if values_dtype is None:
+            values_dtype = np.float64
+
+        try:
+            if not sorted(indep_range) == list(indep_range):
+                raise TypeError
+        except TypeError:
+            raise TypeError("indep_range not a monotonic increasing sequence")
+
+        super().__init__(ch_names=ch_names,
+                         channel_fmt=(values_dtype, len(indep_range)),
+                         **kwargs)
+
+        self._range = np.array(indep_range)
+        self._indep_name = indep_name
+
+    def update(self, timestamp, spectra):
+        """Append a spectrum to stored data.
+
+        Args:
+            timestamp (np.float64): Timestamp for the current spectra.
+            spectrum: Spectra for each of the channels.
+                Should be a 2D iterable structure (e.g. list of lists, or
+                `np.ndarray`) where the first dimension corresponds to channels
+                and the second to the spectrum range.
+
+        TODO:
+            * May be able to remove this method if `TimeSeries` update method
+              appends based on channel data type (see `TimeSeries` TODOs)
+        """
+        try:
+            super(Spectra, self).update([timestamp], [spectra])
+        except ValueError:
+            msg = "cannot update with spectra of incorrect/inconsistent length"
+            raise ValueError(msg)
+
+    @property
+    def range(self):
+        return np.copy(self._range)
+
+    @property
+    def indep_name(self):
+        return self._indep_name
