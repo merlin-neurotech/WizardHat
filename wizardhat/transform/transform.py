@@ -141,18 +141,24 @@ class PSD(Transformer):
         self.n_samples = window*self.sfreq
         self.n_channels = len(buffer_in.ch_names)
         self.w = np.hamming(self.n_samples)
+        self.time = time.time()
         self._get_nfft()
+        self.indep_range = 256/2*np.linspace(0,1,self.nfft/2)  #TODO Transfer sfreq property to buffer specific 
+        self.data_out = Spectra.__init__(self.buffer.ch_names,self.indep_range)
         self.run()
 
+
     def run(self):
-        ##TODO Get the data sampler to run only every 1 second or 256 samples
-        ##TODO Send PSD to a FrequencySeries object
+        self.start_time = self.time
         while True:
-            self.buffer.updated.wait()
-            data_in = self.buffer.unstructured[-self.n_samples:,1:5]
-            psd = self._get_power_spectrum(data_in)
-            print(psd.shape)
-            break
+            timestamp = self.time
+            if timestamp - self.start_time >=1:
+                data_in = self.buffer.unstructured[-self.n_samples:,1:5]
+                psd = self._get_power_spectrum(data_in)
+                self.data_out.update(timestamp, psd)
+                self.start_time = timestamp
+            else:
+                continue
     def _get_nfft(self):
         n=1
         while n < self.n_samples:
