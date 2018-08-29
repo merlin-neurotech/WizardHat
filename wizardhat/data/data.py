@@ -118,13 +118,8 @@ class Data:
 
     @property
     def unstructured(self):
-        """Return structured as regular `np.ndarray`.
-
-        TODO:
-            * dtype (np.float64?) based on context
-            * ValueError if self._data is not structured?
-        """
-        return self.data.view((np.float64, self.n_chan + 1))
+        """Return structured data as regular `np.ndarray`."""
+        raise NotImplementedError()
 
     @property
     def dtype(self):
@@ -352,6 +347,16 @@ class TimeSeries(Data):
         """Return copy of channel data, without timestamps."""
         with self._lock:
             return np.copy(self._data[list(self.ch_names)])
+
+    @property
+    def unstructured(self):
+        """Return unstructured copy of channel data, without timestamps."""
+        samples = self.samples
+        try:
+            return samples.view((samples.dtype[0], self.n_chan))
+        except ValueError:
+            raise ValueError("Cannot return unstructured data for " +
+                             "channels with different datatypes/sample shapes")
 
     @property
     def timestamps(self):
