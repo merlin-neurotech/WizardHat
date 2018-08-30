@@ -6,13 +6,16 @@ TODO:
       to use threads for CPU-intensive stuff)
 """
 
+from wizardhat.buffers import Spectra
+
 import copy
 import threading
 
 import mne
 import numpy as np
 import time
-from wizardhat.buffers import Spectra
+
+
 class Transformer(threading.Thread):
     """Base class for transforming data stored in `Buffer` objects.
 
@@ -134,19 +137,21 @@ class MNEFilter(MNETransformer):
     def stop(self):
         self._proceed = False
 
+
 class PSD(Transformer):
-    def __init__(self,buffer_in,sfreq=256,window=1):
-        self.buffer = buffer_in
+    def __init__(self, buffer_in, sfreq=256, window=1):
+        Transformer.__init__(self, buffer_in=buffer_in)
         self.sfreq = sfreq
-        self.n_samples = window*self.sfreq
-        self.n_channels = len(buffer_in.ch_names)
+        self.n_samples = window * self.sfreq
+        self.n_channels = buffer_in.n_chan
         self.w = np.hamming(self.n_samples)
         self.time = time.time
         self._get_nfft()
-        self.indep_range = 256/2*np.linspace(0,1,self.nfft/2) #TODO Transfer sfreq property to buffer specific 
+        self.indep_range = 256/2*np.linspace(0,1,self.nfft/2) #TODO Transfer sfreq property to buffer specific
         #self.indep_range = self.indep_range.tolist()
-        self.data_out = Spectra(self.buffer.ch_names, self.indep_range)
-        self.run()
+        self.buffer_out = Spectra(self.buffer_in.ch_names, self.indep_range)
+
+        self.start()
 
 
     def run(self):
@@ -154,12 +159,12 @@ class PSD(Transformer):
         while True:
             timestamp = self.time()
             if timestamp - self.start_time >=1:
-                data_in = self.buffer.unstructured[-self.n_samples:,0:5] #TODO generalize the unstructured sample
+                data_in = self.buffer_in.unstructured[-self.n_samples:,0:5] #TODO generalize the unstructured sample
                 psd = self._get_power_spectrum(data_in)
                 self.data_out.update(timestamp, psd.T)
                 self.start_time = timestamp
-            else:
-                continue
+
+
     def _get_nfft(self):
         n=1
         while n < self.n_samples:
@@ -170,7 +175,7 @@ class PSD(Transformer):
         data_win_centred = data_in - np.mean(data_in, axis = 0)
         data_hamming_window = (data_win_centred.T*self.w).T
         return data_hamming_window
-    
+
 
     def _get_power_spectrum(self,data_in):
         data_hamming_window = self._get_hamming_window(data_in)

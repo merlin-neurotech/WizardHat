@@ -198,8 +198,8 @@ class TimeSeries(Buffer):
 
     TODO:
         * Warning (error?) when timestamps are out of order
+        * Marker channels
         * Per-channel units?
-        * _format_samples based on dtype, e.g. for array-valued channels
     """
 
     def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
