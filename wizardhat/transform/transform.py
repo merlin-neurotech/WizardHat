@@ -143,12 +143,10 @@ class PSD(Transformer):
         Transformer.__init__(self, buffer_in=buffer_in)
         self.sfreq = sfreq
         self.n_samples = window * self.sfreq
-        self.n_channels = buffer_in.n_chan
         self.w = np.hamming(self.n_samples)
         self.time = time.time
         self._get_nfft()
         self.indep_range = 256/2*np.linspace(0,1,self.nfft/2) #TODO Transfer sfreq property to buffer specific
-        #self.indep_range = self.indep_range.tolist()
         self.buffer_out = Spectra(self.buffer_in.ch_names, self.indep_range)
 
         self.start()
