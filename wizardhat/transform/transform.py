@@ -136,6 +136,7 @@ class MNEFilter(MNETransformer):
 
 class PSD(Transformer):
     def __init__(self,buffer_in,sfreq=256,window=1):
+        Transformer.__init__(self, buffer_in=buffer_in)
         self.buffer = buffer_in
         self.sfreq = sfreq
         self.n_samples = window*self.sfreq
@@ -146,7 +147,7 @@ class PSD(Transformer):
         self.indep_range = 256/2*np.linspace(0,1,self.nfft/2) #TODO Transfer sfreq property to buffer specific 
         #self.indep_range = self.indep_range.tolist()
         self.data_out = Spectra(self.buffer.ch_names, self.indep_range)
-        self.run()
+        self.start()
 
 
     def run(self):
