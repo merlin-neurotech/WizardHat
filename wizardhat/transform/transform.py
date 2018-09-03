@@ -1,32 +1,26 @@
 """Applying arbitrary transformations/calculations to `Data` objects.
-
-
-TODO:
-    * Switch from threading.Thread to multiprocessing.Process (not a good idea
-      to use threads for CPU-intensive stuff)
 """
 
 from wizardhat.buffers import Spectra
+import wizardhat.utils as utils
 
 import copy
-import threading
 
 import mne
 import numpy as np
-import time
 
 
-class Transformer(threading.Thread):
-    """Base class for transforming data stored in `Buffer` objects.
+class Transformer:
+    """Base class for transforming data handled by `Buffer` objects.
 
     Attributes:
-        buffer_in (buffers.Buffer): Input data.
-        buffer_out (buffers.Buffer): Output data.
+        buffer_in (buffers.Buffer): Input data buffer.
+        buffer_out (buffers.Buffer): Output data buffer.
     """
 
     def __init__(self, buffer_in):
-        threading.Thread.__init__(self)
         self.buffer_in = buffer_in
+        self.buffer_in.event_hook += self._buffer_update_callback
 
     def similar_output(self):
         """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
@@ -35,7 +29,8 @@ class Transformer(threading.Thread):
         self.buffer_out.update_pipeline_metadata(self)
         self.buffer_out.update_pipeline_metadata(self.buffer_out)
 
-    def run(self):
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available to filter."""
         raise NotImplementedError()
 
 
@@ -114,28 +109,19 @@ class MNEFilter(MNETransformer):
 
         self._update_interval = update_interval
         self._count = 0
-        self._proceed = True
-        self.start()
 
-    def run(self):
-        # wait until buffer_in is updated
-        while self._proceed:
-            self.buffer_in.updated.wait()
-            self.buffer_in.updated.clear()
-            self._count += 1
-            if self._count == self._update_interval:
-                data = self.buffer_in.unstructured
-                timestamps, samples = data[:, 1], data[:, 1:]
-                filtered = mne.filter.filter_data(samples.T, self._sfreq,
-                                                  *self._band)
-                # samples_mne = self._to_mne_array(samples)
-                # filtered_mne = samples_mne.filter(*self._band)
-                # filtered = self._from_mne_array(filtered_mne)
-                self.buffer_out.update(timestamps, filtered.T)
-                self._count = 0
-
-    def stop(self):
-        self._proceed = False
+    def _buffer_update_callback(self):
+        self._count += 1
+        if self._count == self._update_interval:
+            data = self.buffer_in.unstructured
+            timestamps, samples = data[:, 1], data[:, 1:]
+            filtered = mne.filter.filter_data(samples.T, self._sfreq,
+                                              *self._band)
+            # samples_mne = self._to_mne_array(samples)
+            # filtered_mne = samples_mne.filter(*self._band)
+            # filtered = self._from_mne_array(filtered_mne)
+            self.buffer_out.update(timestamps, filtered.T)
+            self._count = 0
 
 
 class PSD(Transformer):
@@ -144,39 +130,23 @@ class PSD(Transformer):
         self.sfreq = sfreq
         self.n_samples = window * self.sfreq
         self.w = np.hamming(self.n_samples)
-        self.time = time.time
-        self._get_nfft()
-        self.indep_range = 256/2*np.linspace(0,1,self.nfft/2) #TODO Transfer sfreq property to buffer specific
+        self.n_fft = utils.next_pow2(self.n_samples)
+        self.indep_range = np.fft.rfftfreq(self.n_fft, 1 / self.sfreq)
         self.buffer_out = Spectra(self.buffer_in.ch_names, self.indep_range)
 
-        self.start()
+    def _buffer_update_callback(self):
+        timestamp = self.buffer_in.last_sample["time"]
+        buffer_in = self.buffer_in.unstructured[-self.n_samples:,0:5] #TODO generalize the unstructured sample
+        psd = self._get_power_spectrum(buffer_in)
+        self.buffer_out.update(timestamp, psd.T)
 
-
-    def run(self):
-        self.start_time = self.time()
-        while True:
-            timestamp = self.time()
-            if timestamp - self.start_time >=1:
-                data_in = self.buffer_in.unstructured[-self.n_samples:,0:5] #TODO generalize the unstructured sample
-                psd = self._get_power_spectrum(data_in)
-                self.data_out.update(timestamp, psd.T)
-                self.start_time = timestamp
-
-
-    def _get_nfft(self):
-        n=1
-        while n < self.n_samples:
-            n*=2
-        self.nfft = n
-
-    def _get_hamming_window(self,data_in):
-        data_win_centred = data_in - np.mean(data_in, axis = 0)
-        data_hamming_window = (data_win_centred.T*self.w).T
+    def _get_hamming_window(self,buffer_in):
+        data_win_centered = buffer_in - np.mean(buffer_in, axis = 0)
+        data_hamming_window = (data_win_centered.T * self.w).T
         return data_hamming_window
 
-
-    def _get_power_spectrum(self,data_in):
-        data_hamming_window = self._get_hamming_window(data_in)
-        data_fft = np.fft.fft(data_hamming_window, n=self.nfft, axis=0)/self.n_samples
-        psd = 2*np.abs(data_fft[0:int(self.nfft/2),:])
+    def _get_power_spectrum(self,buffer_in):
+        data_hamming_window = self._get_hamming_window(buffer_in)
+        data_fft = np.fft.rfft(data_hamming_window, n=self.n_fft, axis=0) / self.n_samples
+        psd = 2 * np.abs(data_fft)
         return psd

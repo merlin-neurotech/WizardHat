@@ -62,7 +62,6 @@ class Buffer:
         label (str): User-defined addition to standard filename.
 
     Attributes:
-        updated (threading.Event): Flag for threads waiting for data updates.
         filename (str): Final (generated or specified) filename for writing.
         metadata (dict): All metadata included in instance's `.json`.
 
@@ -79,7 +78,7 @@ class Buffer:
 
         # thread control
         self._lock = threading.Lock()
-        self.updated = threading.Event()
+        self.event_hook = utils.EventHook()
 
         # file output preparations
         if not data_dir[0] in ['.', '/']:
@@ -183,7 +182,6 @@ class Buffer:
         # threading objects cannot be copied normally
         # & a new filename is needed
         mask = {'_lock': threading.Lock(),
-                'updated': threading.Event(),
                 'filename': self._new_filename(self._data_dir, self._label)}
         return utils.deepcopy_mask(self, memo, mask)
 
@@ -217,7 +215,7 @@ class TimeSeries(Buffer):
                 Strings should conform to NumPy string datatype specifications;
                 for example, a 64-bit float is specified as `'f8'`. Types may
                 be Python base types (e.g. `float`) or NumPy base dtypes
-               ( e.g. `np.float64`).
+                (e.g. `np.float64`).
         """
         Buffer.__init__(self, **kwargs)
 
@@ -254,7 +252,7 @@ class TimeSeries(Buffer):
         This constructor also expects to be passed a nominal sampling frequency
         so that it can determine the number of samples corresponding to the
         desired duration. Note that duration is usually not evenly divisible by
-        sampling frequency, so that the number of samples stored
+        sampling frequency, and the number of samples stored will be rounded.
 
         Args:
             ch_names (List[str]): List of channel names.
@@ -290,7 +288,7 @@ class TimeSeries(Buffer):
         """
         self._new = self._format_samples(timestamps, samples)
         self._split_append(self._new)
-        self.updated.set()
+        self.event_hook.fire()
 
     def write_to_file(self, force=False):
         """Write any unwritten samples to file.
