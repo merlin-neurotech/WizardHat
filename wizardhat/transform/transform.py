@@ -125,28 +125,29 @@ class MNEFilter(MNETransformer):
 
 
 class PSD(Transformer):
-    def __init__(self, buffer_in, sfreq=256, window=1):
+    def __init__(self, buffer_in, sfreq=256, n_samples=256, pow2=True,
+                 window=np.hamming):
         Transformer.__init__(self, buffer_in=buffer_in)
         self.sfreq = sfreq
-        self.n_samples = window * self.sfreq
-        self.w = np.hamming(self.n_samples)
-        self.n_fft = utils.next_pow2(self.n_samples)
+        self.n_fft = utils.next_pow2(n_samples)
+        self.window = window(self.n_fft).reshape((self.n_fft, 1))
         self.indep_range = np.fft.rfftfreq(self.n_fft, 1 / self.sfreq)
         self.buffer_out = Spectra(self.buffer_in.ch_names, self.indep_range)
 
     def _buffer_update_callback(self):
         timestamp = self.buffer_in.last_sample["time"]
-        buffer_in = self.buffer_in.unstructured[-self.n_samples:,0:5] #TODO generalize the unstructured sample
-        psd = self._get_power_spectrum(buffer_in)
+        data = self.buffer_in.unstructured[-self.n_fft:, :]
+        psd = self._get_power_spectrum(data)
         self.buffer_out.update(timestamp, psd.T)
 
-    def _get_hamming_window(self,buffer_in):
-        data_win_centered = buffer_in - np.mean(buffer_in, axis = 0)
-        data_hamming_window = (data_win_centered.T * self.w).T
-        return data_hamming_window
+    def _get_windowed(self, data):
+        data_centered = data - np.mean(data, axis = 0)
+        data_windowed = data_centered * self.window
+        return data_windowed
 
-    def _get_power_spectrum(self,buffer_in):
-        data_hamming_window = self._get_hamming_window(buffer_in)
-        data_fft = np.fft.rfft(data_hamming_window, n=self.n_fft, axis=0) / self.n_samples
+    def _get_power_spectrum(self, data):
+        data_windowed = self._get_windowed(data)
+        data_fft = np.fft.rfft(data_windowed, n=self.n_fft, axis=0)
+        data_fft /= self.n_fft
         psd = 2 * np.abs(data_fft)
         return psd

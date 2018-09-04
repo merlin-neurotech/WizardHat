@@ -133,7 +133,7 @@ class Lines(Plotter):
     def _update(self, data_dict):
         self._source.stream(data_dict, self._n_samples)
 
-    def _input_buffer_callback(self):
+    def _buffer_update_callback(self):
         #TODO Time delay of 1 second is necessary because there seems to be plotting issue related to server booting
         #time delay allows the server to boot before samples get sent to it.
         data_dict = {name: self.buffer.last_samples[name]
