@@ -89,7 +89,7 @@ class MNETransformer(Transformer):
 
 
 class MNEFilter(MNETransformer):
-    """Apply MNE filters to TimeSeries buffer objects."""
+    """Apply MNE filters to `TimeSeries` buffer objects."""
 
     def __init__(self, buffer_in, l_freq, h_freq, sfreq, update_interval=10):
         """Construct an `MNEFilter` instance.
@@ -125,9 +125,22 @@ class MNEFilter(MNETransformer):
 
 
 class PSD(Transformer):
-    def __init__(self, buffer_in, sfreq=256, n_samples=256, pow2=True,
+    """Calculate the power spectral density for time series data."""
+
+    def __init__(self, buffer_in, sfreq=None, n_samples=256, pow2=True,
                  window=np.hamming):
         Transformer.__init__(self, buffer_in=buffer_in)
+
+        if sfreq is None:
+            dts = np.diff(self.buffer_in.timestamps)
+            unique_dts = set(dts[dts > 0])
+            # rate can be inferred if all timestamps equally spaced
+            if len(unique_dts) == 1:
+                sfreq = 1 / unique_dts.pop()
+            else:
+                raise ValueError("Sampling frequency not given and cannot " +
+                                 "be inferred from buffered timestamps")
+
         self.sfreq = sfreq
         self.n_fft = utils.next_pow2(n_samples)
         self.window = window(self.n_fft).reshape((self.n_fft, 1))
