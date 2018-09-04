@@ -26,6 +26,7 @@ from bokeh.models import ColumnDataSource
 from bokeh.palettes import all_palettes as palettes
 from bokeh.plotting import figure
 from bokeh.server.server import Server
+import numpy as np
 from tornado import gen
 
 
@@ -138,6 +139,65 @@ class Lines(Plotter):
         #time delay allows the server to boot before samples get sent to it.
         data_dict = {name: self.buffer.last_samples[name]
                      for name in self.buffer.dtype.names}
+        try:  # don't freak out if IOLoop
+            self._curdoc.add_next_tick_callback(partial(self._update,
+                                                        data_dict))
+        except AttributeError:
+            pass
+
+
+class Spectra(Plotter):
+    """
+    """
+
+    def __init__(self, buffer, palette='Category10', bgcolor="white",
+                 **kwargs):
+        """
+        Args:
+            buffer (buffers.Buffer or List[buffers.Buffer]): Objects with data
+                to be plotted. Multiple objects may be passed in a list, in
+                which case the plot can cycle through plotting the data in
+                each object by pressing 'd'. However, all data objects passed
+                should have a similar form (e.g. `TimeSeries` with same number
+                of rows/samples and channels).
+            plot_params (dict): Plot display parameters.
+        """
+
+        super().__init__(buffer, **kwargs)
+
+        # TODO: initialize with existing samples in self.buffer.data
+        data_dict = {name: np.zeros_like(self.buffer.range)
+                     for name in self.buffer.dtype.names if not name == 'time'}
+        data_dict["range"] = self.buffer.range
+        self._source = ColumnDataSource(data_dict)
+
+        self._colors = palettes[palette][len(self.buffer.ch_names)]
+        self._bgcolor = bgcolor
+
+        if self.autostart:
+            self.run_server()
+
+    def _set_layout(self):
+        self.plots = []
+        for i, ch in enumerate(self.buffer.ch_names):
+            p = figure(plot_height=100,
+                       tools="xpan,xwheel_zoom,xbox_zoom,reset",
+                       y_axis_location="right")
+            p.yaxis.axis_label = ch
+            p.background_fill_color = self._bgcolor
+            p.line(x='range', y=ch, alpha=0.8, line_width=2,
+                   color=self._colors[i], source=self._source)
+            self.plots.append([p])
+
+    @gen.coroutine
+    def _update(self, data_dict):
+        self._source.data = data_dict
+
+    def _buffer_update_callback(self):
+        last_samples = self.buffer.last_samples
+        data_dict = {name: last_samples[name].T
+                     for name in self.buffer.dtype.names if not name == 'time'}
+        data_dict['range'] = self.buffer.range
         try:  # don't freak out if IOLoop
             self._curdoc.add_next_tick_callback(partial(self._update,
                                                         data_dict))
