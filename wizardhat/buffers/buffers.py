@@ -200,8 +200,8 @@ class TimeSeries(Buffer):
         * Per-channel units?
     """
 
-    def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
-                 **kwargs):
+    def __init__(self, ch_names, n_samples=2560, sfreq=None, record=True,
+                 channel_fmt='f8', **kwargs):
         """Create a new `TimeSeries` object.
 
         Args:
@@ -219,6 +219,7 @@ class TimeSeries(Buffer):
         """
         Buffer.__init__(self, **kwargs)
 
+        self.sfreq = sfreq
         # if single dtype given, expand to number of channels
         try:
             np.dtype(channel_fmt)
@@ -260,7 +261,7 @@ class TimeSeries(Buffer):
             window (float): Desired duration of live storage.
         """
         n_samples = int(window * sfreq)
-        return cls(ch_names, n_samples, **kwargs)
+        return cls(ch_names, n_samples, sfreq, **kwargs)
 
     def initialize(self, n_samples=None):
         """Initialize NumPy structured array for data storage.
@@ -329,10 +330,71 @@ class TimeSeries(Buffer):
             raise ValueError(str(stacked))
         return stacked_
 
+    def get_samples(self, last_n=0):
+        """Return copy of channel data, without timestamps.
+
+        Args:
+            last_n (int): Number of most recent samples to return.
+        """
+        with self._lock:
+            return np.copy(self._data[list(self.ch_names)][-last_n:])
+
+    def get_unstructured(self, last_n=0):
+        """Return unstructured copy of channel data, without timestamps.
+
+        Args:
+            last_n (int): Number of most recent samples to return.
+        """
+        samples = self.get_samples(last_n=last_n)
+        try:
+            return samples.view((samples.dtype[0], self.n_chan))
+        except ValueError:
+            raise ValueError("Cannot return unstructured data for " +
+                             "channels with different datatypes/sample shapes")
+
+    def get_timestamps(self, last_n=0):
+        """Return copy of timestamps.
+
+        Args:
+            last_n (int): Number of most recent timestamps to return.
+        """
+        with self._lock:
+            return np.copy(self._data['time'][-last_n:])
+
+    @property
+    def samples(self):
+        """Copy of channel data, without timestamps."""
+        return self.get_samples()
+
+    @property
+    def unstructured(self):
+        """Unstructured copy of channel data, without timestamps."""
+        return self.get_unstructured()
+
+    @property
+    def timestamps(self):
+        """Copy of timestamps."""
+        return self.get_timestamps()
+
+    @property
+    def last_samples(self):
+        return np.copy(self._new)
+
+    @property
+    def last_sample(self):
+        """Last-stored row (timestamp and sample)."""
+        with self._lock:
+            return np.copy(self._data[-1])
+
     @property
     def n_samples(self):
         """Number of samples stored in the NumPy array."""
         return self._data.shape[0]
+
+    @property
+    def n_new(self):
+        """Number of samples received on last update."""
+        return self._new.shape[0]
 
     @property
     def ch_names(self):
@@ -347,38 +409,6 @@ class TimeSeries(Buffer):
     def n_chan(self):
         """Number of channels."""
         return len(self.ch_names)
-
-    @property
-    def samples(self):
-        """Return copy of channel data, without timestamps."""
-        with self._lock:
-            return np.copy(self._data[list(self.ch_names)])
-
-    @property
-    def unstructured(self):
-        """Return unstructured copy of channel data, without timestamps."""
-        samples = self.samples
-        try:
-            return samples.view((samples.dtype[0], self.n_chan))
-        except ValueError:
-            raise ValueError("Cannot return unstructured data for " +
-                             "channels with different datatypes/sample shapes")
-
-    @property
-    def timestamps(self):
-        """Return copy of timestamps."""
-        with self._lock:
-            return np.copy(self._data['time'])
-
-    @property
-    def last_samples(self):
-        return np.copy(self._new)
-
-    @property
-    def last_sample(self):
-        """Last-stored row (timestamp and sample)."""
-        with self._lock:
-            return np.copy(self._data[-1])
 
 
 class Spectra(TimeSeries):

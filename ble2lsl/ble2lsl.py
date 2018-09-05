@@ -474,7 +474,7 @@ class ChunkIterator:
 class NoisySinusoids(ChunkIterator):
     """Iterator class to provide noisy sinusoidal chunks of data."""
 
-    def __init__(self, chunk_shape, srate, freqs=[5, 10, 12, 20], noise_std=1):
+    def __init__(self, chunk_shape, srate, freqs=[5, 10, 50, 20], noise_std=1):
         super().__init__(chunk_shape=chunk_shape, srate=srate)
         self._ang_freqs = 2 * np.pi * np.array(freqs)
         self._speriod = 1 / self._srate
