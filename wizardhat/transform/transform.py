@@ -219,3 +219,47 @@ class MovingAverage(Convolve):
     def __init__(self, buffer_in, n_avg):
         conv_arr = np.array([1 / n_avg] * n_avg)
         Convolve.__init__(self, buffer_in=buffer_in, conv_arr=conv_arr)
+
+class Filter(Transformer):
+    """General class for online data filtering with scipy
+
+     Expects a single data source (e.g. EEG) with consistent units.
+    """
+
+    def __init__(self, buffer_in, lo_cut, hi_cut,order=4):
+        self.ch_names = buffer_in.ch_names
+        self.sfreq = buffer_in.sfreq
+        self.create_filter(lo_cut,hi_cut,order)
+
+        Transformer.__init__(self, buffer_in=buffer_in)
+        self.similar_output()
+
+    def create_filter(self,lo_cut,hi_cut,order):
+        """normalizes lo/hi cutoffs with nyquist frequency, gets filter 
+        coefficients, and initializes filter state zi"""
+        nyq = 0.5 * self.sfreq
+        lo = float(lo_cut) / nyq
+        hi = float(hi_cut) / nyq
+        
+        self.b, self.a = spsig.butter(order, [lo, hi], btype='band')
+        
+        zi = spsig.lfilter_zi(self.b, self.a)
+        self.z = [zi]*len(self.ch_names)
+
+    def apply_filter(self):
+        self._new_filt = [[]]*len(self.ch_names)
+        
+        for i, ch in enumerate(self.ch_names):
+            x = self._new[ch]
+            temp_filt, temp_z = spsig.lfilter(self.b, self.a, x, zi=self.z[i])
+            self._new_filt[i] = list(temp_filt)
+            self.z[i] = list(temp_z)
+        
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available."""
+        self._new = self.buffer_in.last_samples
+        timestamp = self._new['time']
+
+        self.apply_filter()
+
+        #self.buffer_out.update()
