@@ -287,7 +287,16 @@ class TimeSeries(Buffer):
         TODO:
             * Sort timestamps/warn if unsorted?
         """
-        self._new = self._format_samples(timestamps, samples)
+        new = self._format_samples(timestamps, samples)
+        self.update_with_structured(new)
+
+    def update_with_structured(self, new):
+        """Append already structured data to stored data.
+
+        Args:
+            new (np.ndarray): Structured data (`dtype=self.dtype`).
+        """
+        self._new = new
         self._split_append(self._new)
         self.event_hook.fire()
 
