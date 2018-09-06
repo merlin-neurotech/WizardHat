@@ -244,22 +244,23 @@ class Filter(Transformer):
         self.b, self.a = spsig.butter(order, [lo, hi], btype='band')
         
         zi = spsig.lfilter_zi(self.b, self.a)
-        self.z = [zi]*len(self.ch_names)
+        self._z = [zi]*len(self.ch_names)
 
     def apply_filter(self):
-        self._new_filt = [[]]*len(self.ch_names)
+        filtered_samples = [[]]*len(self.ch_names)
         
         for i, ch in enumerate(self.ch_names):
             x = self._new[ch]
-            temp_filt, temp_z = spsig.lfilter(self.b, self.a, x, zi=self.z[i])
-            self._new_filt[i] = list(temp_filt)
-            self.z[i] = list(temp_z)
+            filt, z = spsig.lfilter(self.b, self.a, x, zi=self._z[i])
+            filtered_samples[i] = list(filt)
+            self._z[i] = list(z)
+
+        return [tuple(s) for s in zip(*filtered_samples)]
         
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available."""
         self._new = self.buffer_in.last_samples
-        timestamp = self._new['time']
+        timestamps = self._new['time']
+        samples = self.apply_filter()
 
-        self.apply_filter()
-
-        #self.buffer_out.update()
+        self.buffer_out.update(timestamps,samples)
