@@ -224,19 +224,41 @@ class Filter(Transformer):
     """General class for online data filtering with scipy
 
      Expects a single data source (e.g. EEG) with consistent units.
+     TODO: -Subclasses with different filter types?
+           -Option to filter recursively (current implementation) or in place
+           -Figure out `_buffer_update_callback` issue that requires class attributes
+            before they can be assigned
     """
-
-    def __init__(self, buffer_in, lo_cut, hi_cut,order=4):
+    
+    def __init__(self, buffer_in, low, high, filter_type='band', order=4):
+        """Create a new `Filter` object
+        
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to be filtered.
+            low (float): Lower passband value (Hz)
+            high (float): Upper passband value (Hz)
+            filter_type (str): type of passband for Butterworth filter. 
+                Default: `'band'` bandpass filter
+                `'low'` low-pass filter
+                `'high' high-pass filter
+            order (int): Order of the Butterworth filter. Determines the sharpness of
+                passband cutoff.
+                Default: `4`
+        TODO: improve filter selection... parsing of hi/lo_cut values,
+              notch/bandstop, filters other than butterworth
+                
+        """
+        self.filter_type = filter_type
         self.ch_names = buffer_in.ch_names
         self.sfreq = buffer_in.sfreq
-        self.create_filter(lo_cut,hi_cut,order)
-
-        Transformer.__init__(self, buffer_in=buffer_in)
+        self.create_filter(low,high,order)
+        self.buffer_in = buffer_in # temporarily necessary
         self.similar_output()
+        Transformer.__init__(self, buffer_in=buffer_in)
 
     def create_filter(self,lo_cut,hi_cut,order):
         """normalizes lo/hi cutoffs with nyquist frequency, gets filter 
-        coefficients, and initializes filter state zi"""
+        coefficients `a` and `b`, and initializes filter state `zi`"""
         nyq = 0.5 * self.sfreq
         lo = float(lo_cut) / nyq
         hi = float(hi_cut) / nyq
@@ -247,15 +269,24 @@ class Filter(Transformer):
         self._z = [zi]*len(self.ch_names)
 
     def apply_filter(self):
+        """applies the filter to all data channels in `self._new` and formats
+        for the `buffer_out.update()` method"""
         filtered_samples = [[]]*len(self.ch_names)
         
         for i, ch in enumerate(self.ch_names):
             x = self._new[ch]
             filt, z = spsig.lfilter(self.b, self.a, x, zi=self._z[i])
-            filtered_samples[i] = list(filt)
+            filtered_samples[i] = list(filt) # TODO: change this awkward implementation
             self._z[i] = list(z)
 
         return [tuple(s) for s in zip(*filtered_samples)]
+
+    def similar_output(self):
+        """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
+        """
+        self.buffer_out = copy.deepcopy(self.buffer_in)
+        self.buffer_out.update_pipeline_metadata(self)
+        self.buffer_out.update_pipeline_metadata(self.buffer_out)
         
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available."""
