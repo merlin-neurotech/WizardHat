@@ -6,18 +6,19 @@ from shutil import rmtree
 from setuptools import find_packages, setup, Command
 
 # Package meta-data.
-NAME = 'wizardhat'
+NAME = 'WizardHat'
 DESCRIPTION = ('Real-time processing and plotting of data streamed over LSL, '
                + 'with a focus on student-led BCI projects.')
 URL = 'https://github.com/merlin-neurotech/WizardHat'
 EMAIL = ''
 AUTHOR = 'Merlin Neurotech'
 REQUIRES_PYTHON = '>=3.5.0'
-VERSION = 0.2
+VERSION = '0.2.0'
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    # 'requests', 'maya', 'records',
+    'ble2lsl', 'numpy==1.14.0', 'scipy==1.0.0', 'pylsl==1.10.5', 'mne==0.15.2',
+    'bokeh==0.13.0',
 ]
 
 # What packages are optional?
@@ -120,6 +121,8 @@ setup(
         'Topic :: Scientific/Engineering :: Human Machine Interfaces',
         'Topic :: Scientific/Engineering :: Information Analysis',
         'Topic :: Scientific/Engineering :: Visualization',
+        'Intended Audience :: Education',
+        'Intended Audience :: Science/Research',
     ],
     # $ setup.py publish support.
     cmdclass={

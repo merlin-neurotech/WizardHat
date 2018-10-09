@@ -1,4 +1,4 @@
-# WizardHat 
+# WizardHat
 ![logo](https://github.com/merlin-neurotech/WizardHat/blob/master/WizardHatLogoSmall.jpg)
 
 WizardHat is a library for the streaming and handling of EEG data from consumer-grade devices using the Lab Streaming Layer (LSL) protocol. WizardHat's prupose is to enable users and especially first timers to flexibly build brain-computer interfaces (BCIs) without the fuss of configuring a streaming environment. WizardHat was built by Merlin Neurotech at Queen's University. Currently, WizardHat supports the Muse (2016) brain-sensing headband, the OpenBCI Ganglion, and runs on Python 3.6. WizardHat is easy to use and only requires three lines of code to get started. WizardHat's framework enables streaming, manipulation, and visualization of online EEG data.
@@ -83,4 +83,4 @@ Chris,
 Hamada
 
 ## Acknowledgements
-This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules are derived or informed (particularly `ble2lsl` and some of `wizardhat.acquire`). The device specification for the OpenBCI Ganglion is largely derived from [OpenBCI_Python](https://github.com/OpenBCI/OpenBCI_Python).
+This project was inspired by Alexander Barachant's [muse-lsl](https://github.com/alexandrebarachant/muse-lsl) from which some of the modules were originally based. The device specification for the OpenBCI Ganglion is largely derived from [OpenBCI_Python](https://github.com/OpenBCI/OpenBCI_Python).
