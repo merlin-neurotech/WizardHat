@@ -233,7 +233,7 @@ def streams_dict_from_streams(streams):
             are stream types and the values are stream.
     """
     source_ids = set(stream[0] for stream in streams)
-    streams_dict = dict.fromkeys(source_ids, {})
+    streams_dict = dict(zip(source_ids, [{} for _ in source_ids]))
     for source_id, stream_type, stream_info in streams:
         streams_dict[source_id][stream_type] = stream_info
     return streams_dict
@@ -279,9 +279,11 @@ def get_lsl_inlets(streams=None, with_source_ids=('',), with_types=('',),
             list(streams.values())[0].keys()
         except AttributeError:
             streams = streams_dict_from_streams(streams)
+        except IndexError:
+            pass
     streams_dict = streams
 
-    inlets = dict.fromkeys(streams_dict.keys(), {})
+    inlets = dict(zip(streams_dict.keys(), [{} for _ in streams_dict]))
     for source_id, streams in streams_dict.items():
         if any(id_str in source_id for id_str in with_source_ids):
             for stream_type, stream in streams.items():
