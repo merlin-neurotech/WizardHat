@@ -27,7 +27,6 @@ def dummy_streamers(request):
         dummies.append((dummy, device, source_id, subscriptions))
 
     def teardown():
-        print(dummies)
         for dummy, _, _, _ in dummies:
             dummy.stop()
             del(dummy)
@@ -107,26 +106,29 @@ def dummy_receivers(dummy_streamers):
     receivers = {source_id: acquire.Receiver(source_id=source_id,
                                              autostart=False)
                  for _, _, source_id, _ in dummy_streamers}
+    print({k: rec.sfreq for k, rec in receivers.items()})
     return receivers
 
 
 class TestReceiver:
-
     def test_multiple_streams(self, dummy_streamers, mocker):
         if len(dummy_streamers) > 1:
             dummy_ids = [source_id for _, _, source_id, _ in dummy_streamers]
             source_ids = []
             for dummy_idx in range(len(dummy_streamers)):
-                with mock.mocker.patch('__builtin__.input') as mock_input:
-                    mock_input.return_value = dummy_idx
+                # mock user input to select each of the sources
+                with mocker.patch('builtins.input',
+                                  side_effect=str(dummy_idx)) as mock_input:
                     receiver = acquire.Receiver()
                     source_ids.append(receiver._source_id)
+            # all dummies selectable by Receiver?
             assert set(source_ids) == set(dummy_ids)
 
     def test_metadata(self, dummy_streamers, dummy_receivers):
         for dummy, device, source_id, subscriptions in dummy_streamers:
             receiver = dummy_receivers[source_id]
             stream_params = device.PARAMS['streams']
+            #print(receiver.sfreq['EEG'], stream_params['nominal_srate']['EEG'])
             # check metadata
             for stream_type in subscriptions:
                 assert (receiver.sfreq[stream_type]
