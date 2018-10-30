@@ -8,9 +8,12 @@ from wizardhat import acquire
 
 import pkgutil
 import time
+from unittest import mock
 
+import numpy as np
 import pytest
 from pytest_mock import mocker
+
 
 # params: test dummies for all compatible devices; or test with no dummies
 @pytest.fixture(scope='module',
@@ -34,10 +37,12 @@ def dummy_streamers(request):
 
     return dummies
 
+
 @pytest.fixture(scope='module')
 def streams_dict(dummy_streamers):
     streams_dict = acquire.get_lsl_streams()
     return streams_dict
+
 
 def test_get_lsl_streams(streams_dict, dummy_streamers):
     # detected source_ids
@@ -69,14 +74,29 @@ def test_get_lsl_streams(streams_dict, dummy_streamers):
             assert (stream.channel_count()
                     == device.PARAMS['streams']['channel_count'][stream_type])
 
-def test_get_lsl_inlets(streams_dict, dummy_streamers):
+
+@pytest.fixture(scope='module')
+def stream_inlets(streams_dict, dummy_streamers):
+    # NOTE: the arrangement of stream_inlets may seem redundant;
+    # when functioning normally `stream_inlets[source_id]` should have one
+    # key (equal to `source_id`); i.e. the same key will be nested
+    # BUT this will not necessarily be true if something is wrong
+    stream_inlets = {}
+    for dummy, device, source_id, subscriptions in dummy_streamers:
+        inlets = acquire.get_lsl_inlets(streams_dict,
+                                        with_source_ids=(source_id,))
+        stream_inlets[source_id] = inlets
+    return stream_inlets
+
+
+def test_get_lsl_inlets(streams_dict, dummy_streamers, stream_inlets):
+    """Do the acquired inlets contain the expected metadata, etc.?"""
     if dummy_streamers == []:
         # no-dummies case
         assert acquire.get_lsl_inlets(streams_dict) == {}
 
     for dummy, device, source_id, subscriptions in dummy_streamers:
-        inlets = acquire.get_lsl_inlets(streams_dict,
-                                        with_source_ids=(source_id,))
+        inlets = stream_inlets[source_id]
         # only contains key for selected source id?
         assert set(inlets.keys()) == {source_id}
         # inlet keys correspond to default subscriptions?
@@ -101,34 +121,73 @@ def test_get_lsl_inlets(streams_dict, dummy_streamers):
 
         # TODO: check that with_type works for more arbitrary type selections
 
-@pytest.fixture(scope='class')
-def dummy_receivers(dummy_streamers):
-    receivers = {source_id: acquire.Receiver(source_id=source_id,
-                                             autostart=False)
-                 for _, _, source_id, _ in dummy_streamers}
-    print({k: rec.sfreq for k, rec in receivers.items()})
+
+def test_get_ch_names(dummy_streamers, stream_inlets):
+    """Does `acquire.ch_names` reflect the channel names in the device file?"""
+    for _, device, source_id, subscriptions in dummy_streamers:
+        print(stream_inlets)
+        inlets = stream_inlets[source_id]
+        for stream_type in subscriptions:
+            ch_names = acquire.get_ch_names(inlets[source_id][stream_type]
+                                            .info())
+            assert (device.PARAMS['streams']['ch_names'][stream_type]
+                    == tuple(ch_names))
+
+
+def test_dejitter_timestamps():
+    """This is basically a reference implementation of `dejitter_timestamps`
+    against which it is compared..."""
+    n_steps = 100
+    n_tests = 50
+    sfreqs = np.linspace(1, 5000, n_tests).astype(int)
+    last_times = np.random.randint(-100, 100, size=n_tests)
+    test_timestamps = np.random.random((n_tests, n_steps)) + np.arange(n_steps)
+    expected_timestamps = [np.arange(n_steps)/sfreq + last_times[i] + 1/sfreq
+                           for i, sfreq in enumerate(sfreqs)]
+    for i, args in enumerate(zip(test_timestamps, sfreqs, last_times)):
+        dejittered = acquire.dejitter_timestamps(*args)
+        # there may be some floating-point errors, so just make sure the
+        # difference is tiny
+        assert np.all((dejittered - expected_timestamps[i]) < 1e-14)
+
+
+def construct_receiver_no_id(source_id=None, **kwargs):
+    """Used to force manual selection among multiple sources."""
+    return acquire.Receiver(source_id=None, **kwargs)
+
+
+@pytest.fixture(scope='class', params=[acquire.Receiver,
+                                       construct_receiver_no_id])
+def dummy_receivers(request, dummy_streamers):
+    """Provides `acquire.Receiver` objects for dummy devices.
+
+    Either constructs by giving source ID, or by mocking user input.
+    """
+    receivers = {}
+    for idx, (_, _, source_id, _) in enumerate(dummy_streamers):
+        with mock.patch('builtins.input', side_effect=str(idx)):
+            receiver = request.param(source_id=source_id, autostart=False)
+        receivers[source_id] = receiver
     return receivers
 
 
+@pytest.mark.usefixtures("dummy_streamers", "dummy_receivers")
 class TestReceiver:
-    def test_multiple_streams(self, dummy_streamers, mocker):
-        if len(dummy_streamers) > 1:
-            dummy_ids = [source_id for _, _, source_id, _ in dummy_streamers]
-            source_ids = []
-            for dummy_idx in range(len(dummy_streamers)):
-                # mock user input to select each of the sources
-                with mocker.patch('builtins.input',
-                                  side_effect=str(dummy_idx)) as mock_input:
-                    receiver = acquire.Receiver()
-                    source_ids.append(receiver._source_id)
-            # all dummies selectable by Receiver?
-            assert set(source_ids) == set(dummy_ids)
+    """Tests the `acquire.Receiver` objects provided by `dummy_receivers`."""
+
+    def test_multiple_streams(self, dummy_streamers, dummy_receivers):
+        """Make sure a receiver was made for each available source."""
+        dummy_ids = [source_id for _, _, source_id, _ in dummy_streamers]
+        source_ids = [receiver._source_id
+                      for _, receiver in dummy_receivers.items()]
+        assert set(source_ids) == set(dummy_ids)
 
     def test_metadata(self, dummy_streamers, dummy_receivers):
+        """Test whether the `Receiver` object contains expected metadata."""
         for dummy, device, source_id, subscriptions in dummy_streamers:
             receiver = dummy_receivers[source_id]
             stream_params = device.PARAMS['streams']
-            #print(receiver.sfreq['EEG'], stream_params['nominal_srate']['EEG'])
+
             # check metadata
             for stream_type in subscriptions:
                 assert (receiver.sfreq[stream_type]
@@ -139,6 +198,7 @@ class TestReceiver:
                         == list(stream_params['ch_names'][stream_type]))
 
     def test_streaming(self, dummy_streamers, dummy_receivers):
+        """Test whether streaming threads and data transmission work."""
         for dummy, device, source_id, subscriptions in dummy_streamers:
             receiver = dummy_receivers[source_id]
             # basic thread behaviour (start on `receiver.start()`)
