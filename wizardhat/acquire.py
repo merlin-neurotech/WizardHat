@@ -164,7 +164,7 @@ class Receiver:
         inlets = self._inlets
         try:
             while self._proceed:
-                samples, timestamps = inlets[name].pull_chunk(timeout=0.1)
+                samples, timestamps = inlets[name].pull_chunk(timeout=0.0)
 
                 if timestamps:
                     if self._dejitter:
