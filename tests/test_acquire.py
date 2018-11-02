@@ -8,11 +8,11 @@ from wizardhat import acquire
 
 import pkgutil
 import time
+import threading
 from unittest import mock
 
 import numpy as np
 import pytest
-from pytest_mock import mocker
 
 
 # params: test dummies for all compatible devices; or test with no dummies
@@ -125,7 +125,6 @@ def test_get_lsl_inlets(streams_dict, dummy_streamers, stream_inlets):
 def test_get_ch_names(dummy_streamers, stream_inlets):
     """Does `acquire.ch_names` reflect the channel names in the device file?"""
     for _, device, source_id, subscriptions in dummy_streamers:
-        print(stream_inlets)
         inlets = stream_inlets[source_id]
         for stream_type in subscriptions:
             ch_names = acquire.get_ch_names(inlets[source_id][stream_type]
@@ -168,6 +167,13 @@ def dummy_receivers(request, dummy_streamers):
         with mock.patch('builtins.input', side_effect=str(idx)):
             receiver = request.param(source_id=source_id, autostart=False)
         receivers[source_id] = receiver
+
+    def teardown():
+        for sid, receiver in receivers.items():
+            receiver.stop()
+            del(receiver)
+    request.addfinalizer(teardown)
+
     return receivers
 
 
