@@ -14,13 +14,10 @@ URL = 'https://github.com/merlin-neurotech/WizardHat'
 EMAIL = 'mnc@clubs.queensu.ca'
 AUTHOR = 'Merlin Neurotech'
 REQUIRES_PYTHON = '>=3.6.0'
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 
 # What packages are required for this module to be executed?
-REQUIRED = [
-    'ble2lsl', 'numpy>=1.14.0', 'scipy>=1.0.0', 'pylsl>=1.10.5', 'mne>=0.15.2',
-    'bokeh>=0.13.0', 'matplotlib>=2.2.0'
-]
+REQUIRED = []
 
 # What packages are optional?
 EXTRAS = {
@@ -45,10 +42,17 @@ except FileNotFoundError:
 # Load the package's __version__.py module as a dictionary.
 about = {}
 if not VERSION:
-    with open(os.path.join(here, NAME, '__version__.py')) as f:
+    with open(os.path.join(here, NAME.lower(), '__version__.py')) as f:
         exec(f.read(), about)
 else:
     about['__version__'] = VERSION
+
+# load requirements from requirements.txt
+if REQUIRED == []:
+    with open(os.path.join(here, 'requirements.txt')) as f:
+        required = f.read().rstrip().split('\n')
+else:
+    required = REQUIRED
 
 
 class UploadCommand(Command):
@@ -120,7 +124,7 @@ setup(
     # entry_points={
     #     'console_scripts': ['mycli=mymodule:cli'],
     # },
-    install_requires=REQUIRED,
+    install_requires=required,
     extras_require=EXTRAS,
     tests_require=['tox'],
     include_package_data=True,
