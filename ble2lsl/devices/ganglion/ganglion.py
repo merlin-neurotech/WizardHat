@@ -153,7 +153,7 @@ class PacketHandler(BasePacketHandler):
             # convert from packet to sample ID
             sample_id = (packet_id - 1) * 2 + delta_id + 1
             # 19bit packets hold deltas between two samples
-            self._last_eeg_data += np.array(deltas[delta_id])
+            self._last_eeg_data -= np.array(deltas[delta_id])
             self._update_counts_and_enqueue("EEG", sample_id)
 
     def _parse_compressed_19bit(self, packet_id, packet):
