@@ -29,6 +29,7 @@ from warnings import warn
 import numpy as np
 import pygatt
 from pygatt.backends.bgapi.exceptions import ExpectedResponseTimeout
+from pygatt.exceptions import NotConnectedError
 import pylsl as lsl
 
 INFO_ARGS = ['type', 'channel_count', 'nominal_srate', 'channel_format']
@@ -90,7 +91,7 @@ class BaseStreamer:
 
     def _init_lsl_outlets(self):
         """Call in subclass after acquiring address."""
-        source_id = "{}-{}".format(self._device.NAME, self._address)
+        source_id = "{}-{}".format(self._specific_device_name, self._address)
         self._info = {}
         self._outlets = {}
         for name in self._subscriptions:
@@ -255,7 +256,7 @@ class Streamer(BaseStreamer):
         self._ble_device.disconnect()  # BLE disconnect
         self._adapter.stop()
 
-    def connect(self):
+    def connect(self,max_attempts=20):
         """Establish connection to BLE device (prior to `start`).
 
         Starts the `pygatt` adapter, resolves the device address if necessary,
@@ -263,16 +264,25 @@ class Streamer(BaseStreamer):
         device parameters.
         """
         adapter_started = False
+        attempt =0
         while not adapter_started:
             try:
                 self._adapter.start()
                 adapter_started = True
             except (ExpectedResponseTimeout, StructError):
                 continue
+            except NotConnectedError:
+                if attempt <= max_attempts:
+                    time.sleep(0.1)
+                    attempt +=1
+                    continue
+                else:
+                    raise NotConnectedError
+
 
         if self._address is None:
             # get the device address if none was provided
-            self._address = self._resolve_address(self._device.NAME)
+            self._specific_device_name, self._address = self._resolve_address(self._device.NAME)
         try:
             self._ble_device = self._adapter.connect(self._address,
                 address_type=self._ble_params['address_type'],
@@ -304,7 +314,7 @@ class Streamer(BaseStreamer):
         list_devices = self._adapter.scan(timeout=self._scan_timeout)
         for device in list_devices:
             if name in device['name']:
-                return device['address']
+                return device['name'],device['address']
         raise(ValueError("No devices found with name `{}`".format(name)))
 
     def _transmit_chunks(self):
@@ -378,7 +388,8 @@ class Dummy(BaseStreamer):
         BaseStreamer.__init__(self, device=device, subscriptions=subscriptions,
                               **kwargs)
 
-        self._address = "DUMMY"
+        self._address = "OuterSpace"
+        self._specific_device_name='Dummy'
         self._init_lsl_outlets()
 
         chunk_shapes = {name: self._chunks[name].shape
