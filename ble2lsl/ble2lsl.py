@@ -388,7 +388,8 @@ class Dummy(BaseStreamer):
         BaseStreamer.__init__(self, device=device, subscriptions=subscriptions,
                               **kwargs)
 
-        self._address = "DUMMY"
+        self._address = "OuterSpace"
+        self._specific_device_name='Dummy'
         self._init_lsl_outlets()
 
         chunk_shapes = {name: self._chunks[name].shape
