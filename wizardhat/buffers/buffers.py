@@ -198,10 +198,11 @@ class TimeSeries(Buffer):
         * Warning (error?) when timestamps are out of order
         * Marker channels
         * Per-channel units?
+        * store_once behaviour is a bit awkward. What about long windows?
     """
 
     def __init__(self, ch_names, n_samples=2560, sfreq=None, record=True,
-                 channel_fmt='f8', **kwargs):
+                 channel_fmt='f8', store_once=False, **kwargs):
         """Create a new `TimeSeries` object.
 
         Args:
@@ -216,6 +217,7 @@ class TimeSeries(Buffer):
                 for example, a 64-bit float is specified as `'f8'`. Types may
                 be Python base types (e.g. `float`) or NumPy base dtypes
                 (e.g. `np.float64`).
+            store_once (bool): Whether to stop storing data when window filled.
         """
         Buffer.__init__(self, **kwargs)
 
@@ -235,6 +237,8 @@ class TimeSeries(Buffer):
             raise ValueError("Number of formats must match number of channels")
 
         self._record = record
+        self._write = True
+        self._store_once = store_once
         # write remaining data to file on program exit (e.g. quit())
         if record:
             atexit.register(self.write_to_file)
@@ -320,10 +324,14 @@ class TimeSeries(Buffer):
         # however, last chunk added may push out some unwritten samples
         # therefore split appends before and after write_to_file
         cutoff = self._count
-        self._append(new[:cutoff])
-        if self._count == 0:
-            self.write_to_file()
-            self._append(new[cutoff:])
+        if self._write:
+            self._append(new[:cutoff])
+            if self._count == 0:
+                self.write_to_file()
+                if self._store_once:
+                    self._write = False
+                else:
+                    self._append(new[cutoff:])
 
     def _append(self, new):
         with self._lock:
@@ -356,9 +364,11 @@ class TimeSeries(Buffer):
         """
         samples = self.get_samples(last_n=last_n)
         try:
-            #return samples.view((samples.dtype[0], self.n_chan))
             return np.array(samples.tolist())
-        except ValueError:
+            #return samples.view((samples.dtype[0], self.n_chan))
+        except ValueError as e:
+            print(samples.shape, samples.dtype, self.n_chan)
+            raise e
             raise ValueError("Cannot return unstructured data for " +
                              "channels with different datatypes/sample shapes")
 
