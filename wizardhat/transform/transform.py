@@ -146,7 +146,7 @@ class PSD(Transformer):
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available."""
         timestamp = self.buffer_in.last_sample["time"]
-        data = self.buffer_in.get_unstructured(last_n=self.n_fft)
+        data = self.buffer_in.get_unstructured(last_n=self.n_fft) #TODO: change this name from data to _new?
         psd = self._get_power_spectrum(data)
         self.buffer_out.update(timestamp, psd.T)
 
