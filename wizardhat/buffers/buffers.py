@@ -356,11 +356,9 @@ class TimeSeries(Buffer):
         """
         samples = self.get_samples(last_n=last_n)
         try:
-            return np.array(samples.tolist())
             #return samples.view((samples.dtype[0], self.n_chan))
-        except ValueError as e:
-            print(samples.shape, samples.dtype, self.n_chan)
-            raise e
+            return np.array(samples.tolist())
+        except ValueError:
             raise ValueError("Cannot return unstructured data for " +
                              "channels with different datatypes/sample shapes")
 
