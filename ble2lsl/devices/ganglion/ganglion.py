@@ -61,8 +61,8 @@ PARAMS = dict(
 """OpenBCI Ganglion LSL- and BLE-related parameters."""
 
 INT_SIGN_BYTE = (b'\x00', b'\xff')
-SCALE_FACTOR = streams_dict([1.2 / (8388608.0 * 1.5 * 51.0),
-                             0.016,
+SCALE_FACTOR = streams_dict([1200 / (8388608.0 * 1.5 * 51.0),
+                             0.0000016,
                              1  # not used (messages)
                              ])
 """Scale factors for conversion of EEG and accelerometer data to mV."""
