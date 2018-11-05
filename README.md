@@ -7,26 +7,49 @@ For first time python users, please refer to our [beginner's guide](https://docs
 ## Note : Active Development
 Our dedicated team at Merlin Neurotech is continously working to improve WizardHat and add new functionality.
 Current on-going projects:
-- Frequency Spectrum Data Class
 - MNE Library Compatibility
 - Implementing simple filters
-- Power spectrum transformer
 
 Check back soon if the feature you are looking for is under development!
 
 ## Getting Started
 
-To set up WizardHat, begin by cloning this repository on your local environment. Once cloned, ensure you are in a new virtual environment and download the required dependencies.
+The procedure for installing WizardHat depends on whether or not you will be contributing to its development. In either case, begin by creating and activating a new python virtual environment.
 
+### Installing for use only
+Simply run
+
+	pip install wizardhat
+
+This will automatically install the most recent release of WizardHat along with the required dependencies.
+
+### Installing for development
+To set up WizardHat for development, begin by forking the repository on GitHub, then clone your fork:
+
+	git clone https://github.com/<your-github-username>/WizardHat.git
+
+If you are also developing for ble2lsl, fork and then clone the ble2lsl repository as well, and install its dependencies:
+
+	git clone https://github.com/<your-github-username>/ble2lsl.git
+	cd ble2lsl
+	pip install -r requirements.txt
+	pip install -e .
+	cd ..
+
+Whether or not you cloned ble2lsl, install the remaining dependencies for WizardHat:
+
+  cd WizardHat
 	pip install -r requirements.txt
 
-For more details on how to set up your python environment on Windows/MacOS/Linux please refer to our detailed instructions in the documentation file.
+### Finally
+
+For more details on how to set up your Python environment on Windows/MacOS/Linux please refer to our detailed instructions in the documentation file.
 
 Next, to ensure a bug free experience, open [your virtual env name]/lib/python3.6/site packages/pygatt/backends/bgapi/bgapi.py in a text or code editor and add:
 
 	time.sleep(0.25)
 
-between line 200 and 201 and save the file. This ensures that the bluetooth protocol will be given adequate time to connect to the Muse before timing out.
+between line 200 and 201 and save the file. This ensures that the Bluetooth protocol will be given adequate time to connect to the Muse before timing out.
 
 Now you are ready to use WizardHat!
 
