@@ -146,7 +146,7 @@ class PSD(Transformer):
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available."""
         timestamp = self.buffer_in.last_sample["time"]
-        data = self.buffer_in.get_unstructured(last_n=self.n_fft) #TODO: change this name from data to _new?
+        data = self.buffer_in.get_unstructured(last_n=self.n_fft)
         psd = self._get_power_spectrum(data)
         self.buffer_out.update(timestamp, psd.T)
 
@@ -221,13 +221,77 @@ class MovingAverage(Convolve):
         Convolve.__init__(self, buffer_in=buffer_in, conv_arr=conv_arr)
 
 class Filter(Transformer):
+    """General class for online data filtering with `scipy.signal`
+
+     Expects a single data source (e.g. EEG) with consistent units.
+
+     This parent class accepts filter designs specified by passing `a` and `b`, 
+     the coefficient vectors of a digital IIR or FIR filter. The filter is then 
+     applied recursively using `scipy.signal.lfilter()`. 
+     
+     For examples of acceptable `a` and `b` coefficients, see the functions at:
+     https://docs.scipy.org/doc/scipy/reference/signal.html#matlab-style-iir-filter-design
+    """
+
+    def __init__(self, buffer_in, a, b):
+        """Create a new `Filter` object
+        
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to be filtered.
+            a (array_like): Denominator coefficient vector of IIR or FIR filter
+            b (array_like): Numerator coefficient vector of IIR or FIR filter
+        """
+        self.buffer_in = buffer_in #temporarily necessary
+        self.ch_names = buffer_in.ch_names
+        self.sfreq = buffer_in.sfreq
+        self.a = a
+        self.b = b
+
+        self.initialize_filter()
+        self.similar_output()
+        Transformer.__init__(self, buffer_in=buffer_in)
+
+    def initialize_filter(self):
+        """uses filter coefficients `a` and `b` to get initial filter 
+        state `zi` and initialize recursive filter state `self._z`"""
+        zi = spsig.lfilter_zi(self.b, self.a)
+        self._z = [zi]*len(self.ch_names)
+
+    def apply_filter(self):
+        """applies the filter to all data channels in `self._new` and formats
+        result for the `buffer_out.update()` method"""
+        filtered_samples = [[]]*len(self.ch_names)
+        
+        for i, ch in enumerate(self.ch_names):
+            # TODO: change this awkward implementation
+            x = self._new[ch]
+            filt, z = spsig.lfilter(self.b, self.a, x, zi=self._z[i])
+            filtered_samples[i] = list(filt)
+            self._z[i] = list(z)
+
+        return [tuple(s) for s in zip(*filtered_samples)]
+
+    def similar_output(self):
+        """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
+        """
+        self.buffer_out = copy.deepcopy(self.buffer_in)
+        self.buffer_out.update_pipeline_metadata(self)
+        self.buffer_out.update_pipeline_metadata(self.buffer_out)
+
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available."""
+        self._new = self.buffer_in.last_samples
+        timestamps = self._new['time']
+        samples = self.apply_filter()
+
+        self.buffer_out.update(timestamps,samples)
+
+class Bandpass(Transformer):
     """General class for online data filtering with scipy
 
      Expects a single data source (e.g. EEG) with consistent units.
      TODO: -Subclasses with different filter types?
            -Option to filter recursively (current implementation) or in place
-           -Figure out `_buffer_update_callback` issue that requires class attributes
-            before they can be assigned
     """
     
     def __init__(self, buffer_in, low, high, filter_type='band', order=4):
