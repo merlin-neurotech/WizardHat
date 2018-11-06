@@ -15,14 +15,10 @@ Also just two manually retrieved channels for now as a proof of concept, but
 the gridplot method seems to work well for this.
 
 TODO:
-    * Figure out sampling method- possibly using Data's self.updated attribute
-        to trigger an update? Maybe we can update everything "in-place" because
-        buffer.data already has a built-in window..
     * Automatically determine device name/set to title?
 """
 
 from functools import partial
-from threading import Thread
 
 from bokeh.layouts import row,gridplot, widgetbox
 from bokeh.models.widgets import Button, RadioButtonGroup
@@ -30,11 +26,11 @@ from bokeh.models import ColumnDataSource
 from bokeh.palettes import all_palettes as palettes
 from bokeh.plotting import figure
 from bokeh.server.server import Server
+import numpy as np
 from tornado import gen
-import time
 
 
-class Plotter():
+class Plotter:
     """Base class for plotting."""
 
     def __init__(self, buffer, autostart=True):
@@ -45,10 +41,15 @@ class Plotter():
             plot_params (dict): Plot display parameters.
         """
         self.buffer = buffer
+        self.buffer.event_hook += self._buffer_update_callback
         # output_file('WizardHat Plotter.html')
         self.server = Server({'/': self._app_manager})
         #self.add_widgets()
         self.autostart = autostart
+
+    def _buffer_update_callback(self):
+        """Called by `buffer` when new data is available."""
+        raise NotImplementedError()
 
     def add_widgets(self):
         self.stream_option = RadioButtonGroup(labels=['EEG', 'ACC', 'GYR'], active=0)
@@ -60,7 +61,6 @@ class Plotter():
     def run_server(self):
         self.server.start()
         self.server.io_loop.add_callback(self.server.show, '/')
-        self._update_thread.start()
         self.server.io_loop.start()
 
     def _app_manager(self, curdoc):
@@ -106,7 +106,6 @@ class Lines(Plotter):
         data_dict = {name: []  # [self.buffer.data[name][:n_samples]]
                      for name in self.buffer.dtype.names}
         self._source = ColumnDataSource(data_dict)
-        self._update_thread = Thread(target=self._get_new_samples)
         self._n_samples = n_samples
 
         self._colors = palettes[palette][len(self.buffer.ch_names)]
@@ -131,22 +130,76 @@ class Lines(Plotter):
                    color=self._colors[i], source=self._source)
             self.plots.append([p])
 
-
     @gen.coroutine
     def _update(self, data_dict):
         self._source.stream(data_dict, self._n_samples)
 
-    def _get_new_samples(self):
+    def _buffer_update_callback(self):
         #TODO Time delay of 1 second is necessary because there seems to be plotting issue related to server booting
         #time delay allows the server to boot before samples get sent to it.
-        time.sleep(1)
-        while True:
-            self.buffer.updated.wait()
-            data_dict = {name: self.buffer.last_samples[name]
-                         for name in self.buffer.dtype.names}
-            try:  # don't freak out if IOLoop
-                self._curdoc.add_next_tick_callback(partial(self._update,
-                                                            data_dict))
-            except AttributeError:
-                pass
-            self.buffer.updated.clear()
+        data_dict = {name: self.buffer.last_samples[name]
+                     for name in self.buffer.dtype.names}
+        try:  # don't freak out if IOLoop
+            self._curdoc.add_next_tick_callback(partial(self._update,
+                                                        data_dict))
+        except AttributeError:
+            pass
+
+
+class Spectra(Plotter):
+    """
+    """
+
+    def __init__(self, buffer, palette='Category10', bgcolor="white",
+                 **kwargs):
+        """
+        Args:
+            buffer (buffers.Buffer or List[buffers.Buffer]): Objects with data
+                to be plotted. Multiple objects may be passed in a list, in
+                which case the plot can cycle through plotting the data in
+                each object by pressing 'd'. However, all data objects passed
+                should have a similar form (e.g. `TimeSeries` with same number
+                of rows/samples and channels).
+            plot_params (dict): Plot display parameters.
+        """
+
+        super().__init__(buffer, **kwargs)
+
+        # TODO: initialize with existing samples in self.buffer.data
+        data_dict = {name: np.zeros_like(self.buffer.range)
+                     for name in self.buffer.dtype.names if not name == 'time'}
+        data_dict["range"] = self.buffer.range
+        self._source = ColumnDataSource(data_dict)
+
+        self._colors = palettes[palette][len(self.buffer.ch_names)]
+        self._bgcolor = bgcolor
+
+        if self.autostart:
+            self.run_server()
+
+    def _set_layout(self):
+        self.plots = []
+        for i, ch in enumerate(self.buffer.ch_names):
+            p = figure(plot_height=100,
+                       tools="xpan,xwheel_zoom,xbox_zoom,reset",
+                       y_axis_location="right")
+            p.yaxis.axis_label = ch
+            p.background_fill_color = self._bgcolor
+            p.line(x='range', y=ch, alpha=0.8, line_width=2,
+                   color=self._colors[i], source=self._source)
+            self.plots.append([p])
+
+    @gen.coroutine
+    def _update(self, data_dict):
+        self._source.data = data_dict
+
+    def _buffer_update_callback(self):
+        last_samples = self.buffer.last_samples
+        data_dict = {name: last_samples[name].T
+                     for name in self.buffer.dtype.names if not name == 'time'}
+        data_dict['range'] = self.buffer.range
+        try:  # don't freak out if IOLoop
+            self._curdoc.add_next_tick_callback(partial(self._update,
+                                                        data_dict))
+        except AttributeError:
+            pass

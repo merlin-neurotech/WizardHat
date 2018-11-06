@@ -1,29 +1,27 @@
 """Applying arbitrary transformations/calculations to `Data` objects.
-
-
-TODO:
-    * Switch from threading.Thread to multiprocessing.Process (not a good idea
-      to use threads for CPU-intensive stuff)
 """
 
+from wizardhat.buffers import Spectra
+import wizardhat.utils as utils
+
 import copy
-import threading
 
 import mne
 import numpy as np
+import scipy.signal as spsig
 
 
-class Transformer(threading.Thread):
-    """Base class for transforming data stored in `Buffer` objects.
+class Transformer:
+    """Base class for transforming data handled by `Buffer` objects.
 
     Attributes:
-        buffer_in (buffers.Buffer): Input data.
-        buffer_out (buffers.Buffer): Output data.
+        buffer_in (buffers.Buffer): Input data buffer.
+        buffer_out (buffers.Buffer): Output data buffer.
     """
 
     def __init__(self, buffer_in):
-        threading.Thread.__init__(self)
         self.buffer_in = buffer_in
+        self.buffer_in.event_hook += self._buffer_update_callback
 
     def similar_output(self):
         """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
@@ -32,7 +30,8 @@ class Transformer(threading.Thread):
         self.buffer_out.update_pipeline_metadata(self)
         self.buffer_out.update_pipeline_metadata(self.buffer_out)
 
-    def run(self):
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available to filter."""
         raise NotImplementedError()
 
 
@@ -91,7 +90,7 @@ class MNETransformer(Transformer):
 
 
 class MNEFilter(MNETransformer):
-    """Apply MNE filters to TimeSeries buffer objects."""
+    """Apply MNE filters to `TimeSeries` buffer objects."""
 
     def __init__(self, buffer_in, l_freq, h_freq, sfreq, update_interval=10):
         """Construct an `MNEFilter` instance.
@@ -111,25 +110,112 @@ class MNEFilter(MNETransformer):
 
         self._update_interval = update_interval
         self._count = 0
-        self._proceed = True
-        self.start()
 
-    def run(self):
-        # wait until buffer_in is updated
-        while self._proceed:
-            self.buffer_in.updated.wait()
-            self.buffer_in.updated.clear()
-            self._count += 1
-            if self._count == self._update_interval:
-                data = self.buffer_in.unstructured
-                timestamps, samples = data[:, 1], data[:, 1:]
-                filtered = mne.filter.filter_data(samples.T, self._sfreq,
-                                                  *self._band)
-                # samples_mne = self._to_mne_array(samples)
-                # filtered_mne = samples_mne.filter(*self._band)
-                # filtered = self._from_mne_array(filtered_mne)
-                self.buffer_out.update(timestamps, filtered.T)
-                self._count = 0
+    def _buffer_update_callback(self):
+        self._count += 1
+        if self._count == self._update_interval:
+            data = self.buffer_in.unstructured
+            timestamps, samples = data[:, 1], data[:, 1:]
+            filtered = mne.filter.filter_data(samples.T, self._sfreq,
+                                              *self._band)
+            # samples_mne = self._to_mne_array(samples)
+            # filtered_mne = samples_mne.filter(*self._band)
+            # filtered = self._from_mne_array(filtered_mne)
+            self.buffer_out.update(timestamps, filtered.T)
+            self._count = 0
 
-    def stop(self):
-        self._proceed = False
+
+class PSD(Transformer):
+    """Calculate the power spectral density for time series data.
+
+    TODO:
+        * control over update frequency?
+    """
+
+    def __init__(self, buffer_in, n_samples=256, pow2=True, window=np.hamming):
+        self.sfreq = buffer_in.sfreq
+        if pow2:
+            n_samples = utils.next_pow2(n_samples)
+        self.n_fft = n_samples
+        self.window = window(self.n_fft).reshape((self.n_fft, 1))
+        self.indep_range = np.fft.rfftfreq(self.n_fft, 1 / self.sfreq)
+        self.buffer_out = Spectra(buffer_in.ch_names, self.indep_range)
+
+        Transformer.__init__(self, buffer_in=buffer_in)
+
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available."""
+        timestamp = self.buffer_in.last_sample["time"]
+        data = self.buffer_in.get_unstructured(last_n=self.n_fft)
+        psd = self._get_power_spectrum(data)
+        self.buffer_out.update(timestamp, psd.T)
+
+    def _get_windowed(self, data):
+        data_centered = data - np.mean(data, axis = 0)
+        data_windowed = data_centered * self.window
+        return data_windowed
+
+    def _get_power_spectrum(self, data):
+        data_windowed = self._get_windowed(data)
+        data_fft = np.fft.rfft(data_windowed, n=self.n_fft, axis=0)
+        data_fft /= self.n_fft
+        psd = 2 * np.abs(data_fft)
+        return psd
+
+
+class Convolve(Transformer):
+    """Convolve a time series of data.
+
+    Currently only convolves across the sampling dimension (e.g. the rows in
+    unstructured data returned by a `buffers.TimeSeries` object) of all
+    channels, and assumes that all channels have the same shape (i.e. as
+    returned by the `get_unstructured` method.)
+    """
+
+    def __init__(self, buffer_in, conv_arr, conv_mode='valid',
+                 conv_method='direct'):
+        """Create a new `Convolve` object.
+
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to convolve.
+            conv_arr (np.ndarray): Array to convolve data with.
+                Should not be longer than `buffer_in.n_samples`.
+            conv_mode (str): Mode for `scipy.signal.convolve`.
+                Default: `'valid'`.
+            conv_method (str): Method for `scipy.signal.convolve`.
+                Default: `'direct'`. For many channels and very large
+                convolution windows, it may be faster to use `'fft'`.
+        """
+        Transformer.__init__(self, buffer_in=buffer_in)
+        self.similar_output()
+        self.conv_mode = conv_mode
+        self.conv_method = conv_method
+
+        # expand convolution array across independent (non-sampling) dims
+        ch_shape = self.buffer_in.unstructured.shape[1:]
+        self.conv_arr = np.array(conv_arr).reshape([-1] + [1] * len(ch_shape))
+        self._conv_n_edge = len(self.conv_arr) - 1
+
+        if self.conv_mode == 'valid':
+            self._timestamp_slice = slice(self._conv_n_edge,
+                                          -self._conv_n_edge)
+        else:
+            raise NotImplementedError()
+
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available."""
+        n_new = self.buffer_in.n_new
+        last_n = max(n_new + 2 * self._conv_n_edge, self.buffer_in.n_samples)
+        data = self.buffer_in.get_unstructured(last_n=last_n)
+        timestamps = self.buffer_in.get_timestamps(last_n=last_n)
+        data_conv = spsig.convolve(data, self.conv_arr, mode=self.conv_mode,
+                                   method=self.conv_method)
+        self.buffer_out.update(timestamps[self._timestamp_slice], data_conv)
+
+
+class MovingAverage(Convolve):
+    """Calculate a uniformly-weighted moving average over a data series."""
+
+    def __init__(self, buffer_in, n_avg):
+        conv_arr = np.array([1 / n_avg] * n_avg)
+        Convolve.__init__(self, buffer_in=buffer_in, conv_arr=conv_arr)
