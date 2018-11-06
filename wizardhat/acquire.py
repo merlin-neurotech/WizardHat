@@ -74,7 +74,7 @@ class Receiver:
         """
 
         streams = get_lsl_streams()
-        source_ids = list(streams.keys())
+        source_ids = list(sorted(streams.keys()))
 
         if source_id is None or source_id not in source_ids:
             # if multiple sources detected, let user choose from a menu
@@ -82,7 +82,7 @@ class Receiver:
                 menu = '\n'.join("{}. {}".format(i, sid)
                                  for i, sid in enumerate(source_ids))
                 select = "Selection [0-{}]: ".format(len(source_ids) - 1)
-                print("Multiple source IDs detected.")
+                print("Multiple sources detected.")
                 print("Choose from the following list:")
                 print(menu)
                 while source_id is None:
@@ -91,7 +91,10 @@ class Receiver:
                     except (ValueError, IndexError):
                         print("Invalid selection! Try again.")
             else:
-                source_id = source_ids[0]
+                try:
+                    source_id = source_ids[0]
+                except IndexError:
+                    raise RuntimeError("No LSL streams detected")
             print("Using source with ID {}".format(source_id))
 
         self._inlets = get_lsl_inlets(streams,
@@ -175,8 +178,8 @@ class Receiver:
         inlets = self._inlets
         try:
             while self._proceed:
-                samples, timestamps = inlets[name].pull_chunk(timeout=0.1)
-                #print(name, samples, timestamps)
+                samples, timestamps = inlets[name].pull_chunk(timeout=0.0)
+
                 if timestamps:
                     if self._dejitter:
                         try:
@@ -250,7 +253,7 @@ def streams_dict_from_streams(streams):
             are stream types and the values are stream.
     """
     source_ids = set(stream[0] for stream in streams)
-    streams_dict = dict.fromkeys(source_ids, {})
+    streams_dict = dict(zip(source_ids, [{} for _ in source_ids]))
     for source_id, stream_type, stream_info in streams:
         streams_dict[source_id][stream_type] = stream_info
     return streams_dict
@@ -296,9 +299,11 @@ def get_lsl_inlets(streams=None, with_source_ids=('',), with_types=('',),
             list(streams.values())[0].keys()
         except AttributeError:
             streams = streams_dict_from_streams(streams)
+        except IndexError:
+            pass
     streams_dict = streams
 
-    inlets = dict.fromkeys(streams_dict.keys(), {})
+    inlets = dict(zip(streams_dict.keys(), [{} for _ in streams_dict]))
     for source_id, streams in streams_dict.items():
         if any(id_str in source_id for id_str in with_source_ids):
             for stream_type, stream in streams.items():
