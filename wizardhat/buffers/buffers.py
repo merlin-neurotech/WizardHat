@@ -14,10 +14,10 @@ TODO:
 import wizardhat.utils as utils
 
 import atexit
-import datetime
 import json
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -62,7 +62,6 @@ class Buffer:
         label (str): User-defined addition to standard filename.
 
     Attributes:
-        updated (threading.Event): Flag for threads waiting for data updates.
         filename (str): Final (generated or specified) filename for writing.
         metadata (dict): All metadata included in instance's `.json`.
 
@@ -79,7 +78,7 @@ class Buffer:
 
         # thread control
         self._lock = threading.Lock()
-        self.updated = threading.Event()
+        self.event_hook = utils.EventHook()
 
         # file output preparations
         if not data_dir[0] in ['.', '/']:
@@ -122,13 +121,8 @@ class Buffer:
 
     @property
     def unstructured(self):
-        """Return structured as regular `np.ndarray`.
-
-        TODO:
-            * dtype (np.float64?) based on context
-            * ValueError if self._data is not structured?
-        """
-        return self.data.view((np.float64, self.n_chan + 1))
+        """Return structured data as regular `np.ndarray`."""
+        raise NotImplementedError()
 
     @property
     def dtype(self):
@@ -168,12 +162,13 @@ class Buffer:
             f.write(metadata_json)
 
     def _new_filename(self, data_dir='data', label=''):
-        date = datetime.date.today().isoformat()
+        time_str = time.strftime("%y%m%d-%H%M%S", time.localtime())
         classname = type(self).__name__
         if label:
             label += '_'
 
-        filename = '{}/{}_{}_{}{{}}'.format(data_dir, date, classname, label)
+        filename = '{}/{}_{}_{}{{}}'.format(data_dir, time_str,
+                                            classname, label)
         # incremental counter to prevent overwrites
         # (based on existence of metadata file)
         count = 0
@@ -187,7 +182,6 @@ class Buffer:
         # threading objects cannot be copied normally
         # & a new filename is needed
         mask = {'_lock': threading.Lock(),
-                'updated': threading.Event(),
                 'filename': self._new_filename(self._data_dir, self._label)}
         return utils.deepcopy_mask(self, memo, mask)
 
@@ -202,10 +196,13 @@ class TimeSeries(Buffer):
 
     TODO:
         * Warning (error?) when timestamps are out of order
+        * Marker channels
+        * Per-channel units?
+        * store_once behaviour is a bit awkward. What about long windows?
     """
 
-    def __init__(self, ch_names, n_samples=2560, record=True, channel_fmt='f8',
-                 **kwargs):
+    def __init__(self, ch_names, n_samples=2560, sfreq=None, record=True,
+                 channel_fmt='f8', store_once=False, **kwargs):
         """Create a new `TimeSeries` object.
 
         Args:
@@ -219,19 +216,29 @@ class TimeSeries(Buffer):
                 Strings should conform to NumPy string datatype specifications;
                 for example, a 64-bit float is specified as `'f8'`. Types may
                 be Python base types (e.g. `float`) or NumPy base dtypes
-               ( e.g. `np.float64`).
+                (e.g. `np.float64`).
+            store_once (bool): Whether to stop storing data when window filled.
         """
         Buffer.__init__(self, **kwargs)
 
-        if str(channel_fmt) == channel_fmt:  # quack
-            channel_fmt = [channel_fmt] * len(ch_names)
+        self.sfreq = sfreq
+        # if single dtype given, expand to number of channels
         try:
-            self._dtype = np.dtype({'names': ["time"] + ch_names,
-                                    'formats': [np.float64] + channel_fmt})
+            np.dtype(channel_fmt)
+            channel_fmt = [channel_fmt] * len(ch_names)
+        except TypeError:
+            pass
+
+        try:
+            self._dtype = np.dtype({'names': ["time"] + list(ch_names),
+                                    'formats': [np.float64] + list(channel_fmt)
+                                    })
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
 
         self._record = record
+        self._write = True
+        self._store_once = store_once
         # write remaining data to file on program exit (e.g. quit())
         if record:
             atexit.register(self.write_to_file)
@@ -250,7 +257,7 @@ class TimeSeries(Buffer):
         This constructor also expects to be passed a nominal sampling frequency
         so that it can determine the number of samples corresponding to the
         desired duration. Note that duration is usually not evenly divisible by
-        sampling frequency, so that the number of samples stored
+        sampling frequency, and the number of samples stored will be rounded.
 
         Args:
             ch_names (List[str]): List of channel names.
@@ -258,7 +265,7 @@ class TimeSeries(Buffer):
             window (float): Desired duration of live storage.
         """
         n_samples = int(window * sfreq)
-        return cls(ch_names, n_samples, **kwargs)
+        return cls(ch_names, n_samples, sfreq, **kwargs)
 
     def initialize(self, n_samples=None):
         """Initialize NumPy structured array for data storage.
@@ -280,10 +287,22 @@ class TimeSeries(Buffer):
             samples (Iterable): Channel data.
                 Data type(s) in `Iterable` correspond to the type(s) specified
                 in `dtype`.
+
+        TODO:
+            * Sort timestamps/warn if unsorted?
         """
-        self._new = self._format_samples(timestamps, samples)
+        new = self._format_samples(timestamps, samples)
+        self.update_with_structured(new)
+
+    def update_with_structured(self, new):
+        """Append already structured data to stored data.
+
+        Args:
+            new (np.ndarray): Structured data (`dtype=self.dtype`).
+        """
+        self._new = new
         self._split_append(self._new)
-        self.updated.set()
+        self.event_hook.fire()
 
     def write_to_file(self, force=False):
         """Write any unwritten samples to file.
@@ -305,10 +324,14 @@ class TimeSeries(Buffer):
         # however, last chunk added may push out some unwritten samples
         # therefore split appends before and after write_to_file
         cutoff = self._count
-        self._append(new[:cutoff])
-        if self._count == 0:
-            self.write_to_file()
-            self._append(new[cutoff:])
+        if self._write:
+            self._append(new[:cutoff])
+            if self._count == 0:
+                self.write_to_file()
+                if self._store_once:
+                    self._write = False
+                else:
+                    self._append(new[cutoff:])
 
     def _append(self, new):
         with self._lock:
@@ -324,10 +347,74 @@ class TimeSeries(Buffer):
             raise ValueError(str(stacked))
         return stacked_
 
+    def get_samples(self, last_n=0):
+        """Return copy of channel data, without timestamps.
+
+        Args:
+            last_n (int): Number of most recent samples to return.
+        """
+        with self._lock:
+            return np.copy(self._data[list(self.ch_names)][-last_n:])
+
+    def get_unstructured(self, last_n=0):
+        """Return unstructured copy of channel data, without timestamps.
+
+        Args:
+            last_n (int): Number of most recent samples to return.
+        """
+        samples = self.get_samples(last_n=last_n)
+        try:
+            return np.array(samples.tolist())
+            #return samples.view((samples.dtype[0], self.n_chan))
+        except ValueError as e:
+            print(samples.shape, samples.dtype, self.n_chan)
+            raise e
+            raise ValueError("Cannot return unstructured data for " +
+                             "channels with different datatypes/sample shapes")
+
+    def get_timestamps(self, last_n=0):
+        """Return copy of timestamps.
+
+        Args:
+            last_n (int): Number of most recent timestamps to return.
+        """
+        with self._lock:
+            return np.copy(self._data['time'][-last_n:])
+
+    @property
+    def samples(self):
+        """Copy of channel data, without timestamps."""
+        return self.get_samples()
+
+    @property
+    def unstructured(self):
+        """Unstructured copy of channel data, without timestamps."""
+        return self.get_unstructured()
+
+    @property
+    def timestamps(self):
+        """Copy of timestamps."""
+        return self.get_timestamps()
+
+    @property
+    def last_samples(self):
+        return np.copy(self._new)
+
+    @property
+    def last_sample(self):
+        """Last-stored row (timestamp and sample)."""
+        with self._lock:
+            return np.copy(self._data[-1])
+
     @property
     def n_samples(self):
         """Number of samples stored in the NumPy array."""
         return self._data.shape[0]
+
+    @property
+    def n_new(self):
+        """Number of samples received on last update."""
+        return self._new.shape[0]
 
     @property
     def ch_names(self):
@@ -343,24 +430,71 @@ class TimeSeries(Buffer):
         """Number of channels."""
         return len(self.ch_names)
 
-    @property
-    def samples(self):
-        """Return copy of channel data, without timestamps."""
-        with self._lock:
-            return np.copy(self._data[list(self.ch_names)])
+
+class Spectra(TimeSeries):
+    """Manages a time series of spectral (e.g. frequency-domain) data.
+
+    This is a constrained subclass of `TimeSeries`. Spectral data may be
+    stored for multiple channels, but all channels will share the same
+    spectral range (the `range` property).
+
+    TODO:
+        * What do timestamps mean here? Transformer-dependent?
+    """
+
+    def __init__(self, ch_names, indep_range, indep_name="Frequency",
+                 values_dtype=None, **kwargs):
+        """Create a new `Spectra` object.
+
+        Args:
+            ch_names (List[str]): List of channel names.
+            indep_range (Iterable): Values of the independent variable.
+            n_samples (int): Number of spectra updates to keep.
+            indep_name (str): Name of the independent variable.
+                Default: `"freq"`.
+            values_dtype (type or np.dtype): Spectrum datatype.
+                Default: `np.float64`.
+        """
+        if values_dtype is None:
+            values_dtype = np.float64
+
+        #try:
+        #    if not sorted(indep_range) == list(indep_range):
+        #        raise TypeError
+        #except TypeError:
+        #    raise TypeError("indep_range not a monotonic increasing sequence")
+
+        super().__init__(ch_names=ch_names,
+                         channel_fmt=(values_dtype, len(indep_range)),
+                         **kwargs)
+
+        self._range = indep_range
+        self._indep_name = indep_name
+
+    def update(self, timestamp, spectra):
+        """Append a spectrum to stored data.
+
+        Args:
+            timestamp (np.float64): Timestamp for the current spectra.
+            spectrum: Spectra for each of the channels.
+                Should be a 2D iterable structure (e.g. list of lists, or
+                `np.ndarray`) where the first dimension corresponds to channels
+                and the second to the spectrum range.
+
+        TODO:
+            * May be able to remove this method if `TimeSeries` update method
+              appends based on channel data type (see `TimeSeries` TODOs)
+        """
+        try:
+            super(Spectra, self).update([timestamp], [spectra])
+        except ValueError:
+            msg = "cannot update with spectra of incorrect/inconsistent length"
+            raise ValueError(msg)
 
     @property
-    def timestamps(self):
-        """Return copy of timestamps."""
-        with self._lock:
-            return np.copy(self._data['time'])
+    def range(self):
+        return np.copy(self._range)
 
     @property
-    def last_samples(self):
-        return np.copy(self._new)
-
-    @property
-    def last_sample(self):
-        """Last-stored row (timestamp and sample)."""
-        with self._lock:
-            return np.copy(self._data[-1])
+    def indep_name(self):
+        return self._indep_name

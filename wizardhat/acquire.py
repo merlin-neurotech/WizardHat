@@ -26,6 +26,7 @@ from wizardhat.buffers import TimeSeries
 
 from serial.serialutil import SerialException
 import threading
+import warnings
 
 import numpy as np
 import pylsl as lsl
@@ -52,7 +53,7 @@ class Receiver:
     """
 
     def __init__(self, source_id=None, with_types=('',), dejitter=True,
-                 max_chunklen=0, autostart=True, **kwargs):
+                 max_chunklen=0, autostart=True, window=10, **kwargs):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
@@ -101,9 +102,16 @@ class Receiver:
 
         # acquire inlet parameters
         self.sfreq, self.n_chan, self.ch_names, self.buffers = {}, {}, {}, {}
-        for name, inlet in self._inlets.items():
+        for name, inlet in list(self._inlets.items()):
             info = inlet.info()
             self.sfreq[name] = info.nominal_srate()
+            # TODO: include message/status streams?
+            if self.sfreq[name] < 1 / window:
+                warn_msg = ("Stream '{}' sampling period larger".format(name)
+                            + " than buffer window: will not be stored")
+                print(warn_msg)
+                self._inlets.pop(name)
+                continue
             self.n_chan[name] = info.channel_count()
             self.ch_names[name] = get_ch_names(info)
             if '' in self.ch_names[name]:
@@ -119,6 +127,7 @@ class Receiver:
                                                         self.sfreq[name],
                                                         metadata=metadata,
                                                         label=info.name(),
+                                                        window=window,
                                                         **kwargs)
 
         self._dejitter = dejitter
@@ -126,6 +135,11 @@ class Receiver:
         self._new_threads()
         if autostart:
             self.start()
+
+    @classmethod
+    def record(cls, duration, **kwargs):
+        """Collect data over a finite interval, then stop."""
+        return cls(window=duration, store_once=True, **kwargs)
 
     def start(self):
         """Start data streaming.
@@ -165,8 +179,11 @@ class Receiver:
                 #print(name, samples, timestamps)
                 if timestamps:
                     if self._dejitter:
-                        timestamps = self._dejitter_timestamps(name,
-                                                               timestamps)
+                        try:
+                            timestamps = self._dejitter_timestamps(name,
+                                                                   timestamps)
+                        except IndexError:
+                            print(name)
                     self.buffers[name].update(timestamps, samples)
 
         except SerialException:

@@ -12,6 +12,47 @@ import os
 import numpy as np
 
 
+class EventHook:
+    """Handler for multiple callbacks triggered by a single event.
+
+    Callbacks may be registered with an `EventHook` instance using the
+    incremental add operator (`event_hook_instance += some_callback_function`),
+    and deregistered by incremental subtraction. When the instance's `fire`
+    method is called (i.e. upon some event), all of the registered callback
+    functions will also be called.
+
+    The primary use for this class is in `Buffer` classes, whose `EventHook`
+    instances allow them to call the update functions of all downstream objects
+    (e.g. `Plotter` or `Transformer` instances).
+
+    TODO:
+        * multiprocessing: spread the workload over several processes; maybe
+        give the option to use either threading or multiprocessing for a given
+        callback, depending on its complexity (IO vs. calculations)
+    """
+    def __init__(self):
+        self._handlers = []
+
+    def __iadd__(self, handler):
+        self._handlers.append(handler)
+        return self
+
+    def __isub__(self, handler):
+        self._handlers.remove(handler)
+        return self
+
+    def fire(self, *args, **keywargs):
+        """Call all registered callback functions."""
+        for handler in self._handlers:
+            handler(*args, **keywargs)
+
+    def clear_handlers(self, in_object):
+        """Deregister all methods of a given object."""
+        for handler in self.__handlers:
+            if handler.__self__ == in_object:
+                self -= handler
+
+
 def deepcopy_mask(obj, memo, mask=None):
     """Generalized method for deep copies of objects.
 
@@ -63,3 +104,8 @@ def makedirs(filepath):
         filepath (str): The path for which to create directories.
     """
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+
+def next_pow2(n):
+    """Return the nearest power of 2 greater than a number."""
+    return int(2 ** np.ceil(np.log2(n)))
