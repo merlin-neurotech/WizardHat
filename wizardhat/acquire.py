@@ -105,7 +105,8 @@ class Receiver:
         for name, inlet in list(self._inlets.items()):
             info = inlet.info()
             self.sfreq[name] = info.nominal_srate()
-            if 1 / self.sfreq[name] > window:
+            # TODO: include message/status streams?
+            if self.sfreq[name] < 1 / window:
                 warn_msg = ("Stream '{}' sampling period larger".format(name)
                             + " than buffer window: will not be stored")
                 print(warn_msg)
@@ -136,9 +137,9 @@ class Receiver:
             self.start()
 
     @classmethod
-    def record(cls, window, **kwargs):
+    def record(cls, duration, **kwargs):
         """Collect data over a finite interval, then stop."""
-        return cls(window=window, store_once=True, **kwargs)
+        return cls(window=duration, store_once=True, **kwargs)
 
     def start(self):
         """Start data streaming.
