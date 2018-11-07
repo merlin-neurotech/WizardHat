@@ -265,6 +265,7 @@ class Bandpass(Filter):
         * determine most clear way to pass low/high arguments, maybe throw 
           an error if neither is passed
         * automatically select filter order with `spsig.buttord` 
+        * self._create_filter() and self._parse_filter_type()?
     """
     
     def __init__(self, buffer_in, low=None, high=None, order=4):
@@ -281,15 +282,12 @@ class Bandpass(Filter):
                 Default: `4`
                 
         """
-        self.sfreq = buffer_in.sfreq
-        self.ch_names = buffer_in.ch_names
-        self.create_filter(low,high,order)
-
+        self.create_filter(low,high,order,buffer_in.sfreq)
         Filter.__init__(self, buffer_in=buffer_in, a=self.a, b=self.b)
 
-    def create_filter(self,low,high,order):
-        """gets filter coefficients `a` and `b`"""
-        nyq = 0.5 * self.sfreq
+    def create_filter(self,low,high,order,sfreq):
+        """computes nyquist frequency and gets filter coefficients `a` and `b`"""
+        nyq = 0.5 * sfreq
         filter_type, critical_freq = self.parse_filter_type(low,high,nyq)
 
         self.b, self.a = spsig.butter(order,critical_freq,btype=filter_type)
@@ -310,3 +308,32 @@ class Bandpass(Filter):
             critical_freq = [float(low)/nyq, float(high)/nyq]
 
         return filter_type, critical_freq
+
+
+class Notch(Filter):
+    """2nd-order IIR digital notch filter that removes a narrow frequency band.
+
+     Expects a single data source (e.g. EEG) with consistent units.
+     """
+    
+    def __init__(self, buffer_in, notch_freq, q=30):
+        """Create a new `Notch` object
+        
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to be filtered.
+            notch_freq (float): frequency to remove (Hz)
+            q (float): Dimensionless quality factor. Controls the notch
+                bandwidth (higher q means a wider notch)
+                Default: `30`
+                
+        """
+        self.create_filter(notch_freq, q, buffer_in.sfreq)
+        Filter.__init__(self, buffer_in=buffer_in, a=self.a, b=self.b)
+
+    def create_filter(self, notch_freq, q, sfreq):
+        """computes nyquist frequency, normalizes notch band, and gets 
+        filter coefficients `a` and `b`"""
+        nyq = 0.5 * sfreq
+        norm_freq = notch_freq / nyq
+
+        self.b, self.a = spsig.iirnotch(norm_freq, q)
