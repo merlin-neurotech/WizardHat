@@ -33,14 +33,12 @@ If you are also developing for ble2lsl, fork and then clone the ble2lsl reposito
 
 	git clone https://github.com/<your-github-username>/ble2lsl.git
 	cd ble2lsl
-	pip install -r requirements.txt
 	pip install -e .
 	cd ..
 
 Whether or not you cloned ble2lsl, install the remaining dependencies for WizardHat:
 
         cd WizardHat
-	pip install -r requirements.txt
 	pip install -e .
 
 The last command creates an editable install of WizardHat; i.e. if you `import wizardhat` in any terminal/script while your WizardHat virtual environment is activated, it will import the current version of the modules from your fork's folder (i.e. the imported module will reflect your developments).
