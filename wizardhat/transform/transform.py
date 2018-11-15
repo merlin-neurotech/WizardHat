@@ -89,47 +89,16 @@ class MNETransformer(Transformer):
         return samples
 
 
-class MNEFilter(MNETransformer):
-    """Apply MNE filters to `TimeSeries` buffer objects."""
-
-    def __init__(self, buffer_in, l_freq, h_freq, sfreq, update_interval=10):
-        """Construct an `MNEFilter` instance.
-
-        Args:
-            buffer_in (buffers.TimeSeries): Input time series.
-            l_freq (float): Low-frequency cutoff.
-            h_freq (float): High-frequency cutoff.
-            sfreq (int): Nominal sampling frequency of input.
-            update_interval (int): How often (in terms of input updates) to
-                filter the data.
-        """
-        MNETransformer.__init__(self, buffer_in=buffer_in, sfreq=sfreq)
-        self.similar_output()
-
-        self._band = (l_freq, h_freq)
-
-        self._update_interval = update_interval
-        self._count = 0
-
-    def _buffer_update_callback(self):
-        self._count += 1
-        if self._count == self._update_interval:
-            data = self.buffer_in.unstructured
-            timestamps, samples = data[:, 1], data[:, 1:]
-            filtered = mne.filter.filter_data(samples.T, self._sfreq,
-                                              *self._band)
-            # samples_mne = self._to_mne_array(samples)
-            # filtered_mne = samples_mne.filter(*self._band)
-            # filtered = self._from_mne_array(filtered_mne)
-            self.buffer_out.update(timestamps, filtered.T)
-            self._count = 0
-
-
 class PSD(Transformer):
     """Calculate the power spectral density for time series data.
 
     TODO:
-        * control over update frequency?
+        * add method that gets power in specified frequency bands?
+        * decide default behaviour wrt fft method.. Welch is good for visualization
+          but not really for using powers as features
+        * the frequencies are computed automatically right now based on the nyquist
+          frequency, which can have unexpected results/makes vis hard
+        * probably shouldn't be computing an fft for every single new sample
     """
 
     def __init__(self, buffer_in, n_samples=256, pow2=True, window=np.hamming):
@@ -219,3 +188,152 @@ class MovingAverage(Convolve):
     def __init__(self, buffer_in, n_avg):
         conv_arr = np.array([1 / n_avg] * n_avg)
         Convolve.__init__(self, buffer_in=buffer_in, conv_arr=conv_arr)
+
+class Filter(Transformer):
+    """General class for online data filtering with `scipy.signal`
+
+     Expects a single data source (e.g. EEG) with consistent units.
+
+     This parent class accepts filter designs specified by passing `a` and `b`, 
+     the coefficient vectors of a digital IIR or FIR filter. The filter is then 
+     applied recursively using `scipy.signal.lfilter()`. 
+     
+     For examples of acceptable `a` and `b` coefficients, see the functions at:
+     https://docs.scipy.org/doc/scipy/reference/signal.html#matlab-style-iir-filter-design
+    """
+
+    def __init__(self, buffer_in, a, b):
+        """Create a new `Filter` object
+        
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to be filtered.
+            a (array_like): Denominator coefficient vector of IIR or FIR filter
+            b (array_like): Numerator coefficient vector of IIR or FIR filter
+        """
+        self.buffer_in = buffer_in #temporarily necessary
+        self.ch_names = buffer_in.ch_names
+        self.sfreq = buffer_in.sfreq
+        self.a = a
+        self.b = b
+
+        self.initialize_filter()
+        self.similar_output()
+        Transformer.__init__(self, buffer_in=buffer_in)
+
+    def initialize_filter(self):
+        """uses filter coefficients `a` and `b` to get initial filter 
+        state `zi` and initialize recursive filter state `self._z`"""
+        zi = spsig.lfilter_zi(self.b, self.a)
+        self._z = [zi]*len(self.ch_names)
+
+    def apply_filter(self):
+        """applies the filter to all data channels in `self._new` and formats
+        result for the `buffer_out.update()` method"""
+        filtered_samples = [[]]*len(self.ch_names)
+        
+        for i, ch in enumerate(self.ch_names):
+            # TODO: change this awkward implementation
+            x = self._new[ch]
+            filt, z = spsig.lfilter(self.b, self.a, x, zi=self._z[i])
+            filtered_samples[i] = list(filt)
+            self._z[i] = list(z)
+
+        return [tuple(s) for s in zip(*filtered_samples)]
+
+    def similar_output(self):
+        """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
+        """
+        self.buffer_out = copy.deepcopy(self.buffer_in)
+        self.buffer_out.update_pipeline_metadata(self)
+        self.buffer_out.update_pipeline_metadata(self.buffer_out)
+
+    def _buffer_update_callback(self):
+        """Called by `buffer_in` when new data is available."""
+        self._new = self.buffer_in.last_samples
+        timestamps = self._new['time']
+        samples = self.apply_filter()
+
+        self.buffer_out.update(timestamps,samples)
+
+class Bandpass(Filter):
+    """Highpass, lowpass, and bandpass filtering via a Butterworth filter.
+
+     Expects a single data source (e.g. EEG) with consistent units.
+
+     TODO: 
+        * decide whether "Bandpass" is really the best name, maybe "Butterworth?"
+        * determine most clear way to pass low/high arguments, maybe throw 
+          an error if neither is passed
+        * automatically select filter order with `spsig.buttord` 
+        * self._create_filter() and self._parse_filter_type()?
+    """
+    
+    def __init__(self, buffer_in, low=None, high=None, order=4):
+        """Create a new `Bandpass` object
+        
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to be filtered.
+            low (float): Lower passband value (Hz); if `None`, value passed for
+                `high` is used for a low-pass filter
+            high (float): Upper passband value (Hz); if `None`, value passed for
+                `low` is used for a high-pass filter
+            order (int): Order of the Butterworth filter. Determines the sharpness of
+                passband cutoff.
+                Default: `4`
+                
+        """
+        self.create_filter(low,high,order,buffer_in.sfreq)
+        Filter.__init__(self, buffer_in=buffer_in, a=self.a, b=self.b)
+
+    def create_filter(self,low,high,order,sfreq):
+        """computes nyquist frequency and gets filter coefficients `a` and `b`"""
+        nyq = 0.5 * sfreq
+        filter_type, critical_freq = self.parse_filter_type(low,high,nyq)
+
+        self.b, self.a = spsig.butter(order,critical_freq,btype=filter_type)
+
+    def parse_filter_type(self,low,high,nyq):
+        """ parses low/high arguments, normalizes low/high cutoffs with nyquist 
+        frequency,and returns passband type"""
+        if low is None and high is None:
+            raise Exception('You must provide at least one passband value')
+        if low is None:
+            filter_type = 'lowpass'
+            critical_freq = [float(high)/nyq]
+        if high is None:
+            filter_type = 'highpass'
+            critical_freq = [float(low)/nyq]
+        if None not in [low, high]:
+            filter_type = 'bandpass' 
+            critical_freq = [float(low)/nyq, float(high)/nyq]
+
+        return filter_type, critical_freq
+
+
+class Notch(Filter):
+    """2nd-order IIR digital notch filter that removes a narrow frequency band.
+
+     Expects a single data source (e.g. EEG) with consistent units.
+     """
+    
+    def __init__(self, buffer_in, notch_freq, q=30):
+        """Create a new `Notch` object
+        
+        Args:
+            buffer_in (buffers.Buffer): Buffer managing data to be filtered.
+            notch_freq (float): frequency to remove (Hz)
+            q (float): Dimensionless quality factor. Controls the notch
+                bandwidth (higher q means a wider notch)
+                Default: `30`
+                
+        """
+        self.create_filter(notch_freq, q, buffer_in.sfreq)
+        Filter.__init__(self, buffer_in=buffer_in, a=self.a, b=self.b)
+
+    def create_filter(self, notch_freq, q, sfreq):
+        """computes nyquist frequency, normalizes notch band, and gets 
+        filter coefficients `a` and `b`"""
+        nyq = 0.5 * sfreq
+        norm_freq = notch_freq / nyq
+
+        self.b, self.a = spsig.iirnotch(norm_freq, q)
