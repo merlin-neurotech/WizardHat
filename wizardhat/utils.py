@@ -97,6 +97,44 @@ def push_rows(arr, rows):
     return arr[-n:]
 
 
+class always_greater(int):
+    """Instances always compare `True` when on the left hand side of `>`."""
+    def __gt__(self, other):
+        return True
+
+
+def menu_numlist(options, menu_intro='', max_tries=always_greater(),
+                 raise_on_failure=False):
+    """Print a numbered list of options and return the first valid choice.
+
+    Args:
+        menu_intro (str): String to print before displaying the menu.
+        max_tries (int): Maximum number of times to retry on invalid response.
+        raise_on_failure (bool): If `True`, raise exception on no more tries.
+    """
+    print('\n', menu_intro)
+    print("Choose one of following:")
+    menu = '\n'.join("{}. {}".format(i, item)
+                     for i, item in enumerate(options))
+    print(menu, '\n')
+
+    select = "Selection [0-{}]: ".format(len(options) - 1)
+    response = None
+    count = 0
+    while response is None and max_tries > count:
+        try:
+            count += 1
+            response = options[int(input(select))]
+        except (ValueError, IndexError):
+            print("Invalid selection! Try again.")
+
+    if response is None and raise_on_failure:
+        raise ValueError("No menu option selected in given number of tries")
+
+    return response
+
+
+
 def makedirs(filepath):
     """Create a directory tree if it does not exist yet, based on a filepath.
 

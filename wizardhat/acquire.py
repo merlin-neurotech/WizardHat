@@ -58,7 +58,7 @@ class Receiver:
 
         Args:
             source_id (str): Full or partial source ID for the streamed device.
-            with_types (Iterable[str]): If no streams are provided, only those
+            with_types (Iterable[str]): Only
                 matching one of these types will be acquired. For example,
                 `with_types=('EEG', 'accelerometer')`.
             dejitter (bool): Whether to regularize inter-sample intervals.
@@ -74,34 +74,40 @@ class Receiver:
         """
 
         streams = get_lsl_streams()
-        source_ids = list(streams.keys())
+        source_ids = list(sorted(streams.keys()))
 
-        if source_id is None or source_id not in source_ids:
-            # if multiple sources detected, let user choose from a menu
-            if len(source_ids) > 1:
-                menu = '\n'.join("{}. {}".format(i, sid)
-                                 for i, sid in enumerate(source_ids))
-                select = "Selection [0-{}]: ".format(len(source_ids) - 1)
-                print("Multiple source IDs detected.")
-                print("Choose from the following list:")
-                print(menu)
-                while source_id is None:
-                    try:
-                        source_id = source_ids[int(input(select))]
-                    except (ValueError, IndexError):
-                        print("Invalid selection! Try again.")
-            else:
+        if source_id is not None:
+            matches = [(source_id in sid) for sid in source_ids]
+            if not any(matches):
+                raise ValueError("No source found matching ID: {}"
+                                 .format(source_id))
+            menu_intro = ("Multiple sources match given ID ({})."
+                          .format(source_id))
+        else:
+            matches = source_ids
+            menu_intro = "Multiple sources detected."
+
+        # let user choose from a menu if multiple sources are detected
+        # or if user-defined `source_id` partially matches more than one
+        if len(matches) > 1:
+            source_id = utils.menu_numlist(matches, menu_intro=menu_intro)
+        else:
+            try:
                 source_id = source_ids[0]
-            print("Using source with ID {}".format(source_id))
+            except IndexError:
+                # TODO: more specific error
+                raise RuntimeError("No LSL streams detected")
+        print("Using source with ID {}".format(source_id))
+        self._source_id = source_id
 
         self._inlets = get_lsl_inlets(streams,
                                       with_types=with_types,
                                       with_source_ids=(source_id,),
                                       max_chunklen=max_chunklen)[source_id]
-        self._source_id = source_id
 
         # acquire inlet parameters
-        self.sfreq, self.n_chan, self.ch_names, self.buffers = {}, {}, {}, {}
+        self.buffers = {}
+        self.sfreq, self.n_chan, self.ch_names = {}, {}, {}
         for name, inlet in list(self._inlets.items()):
             info = inlet.info()
             self.sfreq[name] = info.nominal_srate()
@@ -135,6 +141,14 @@ class Receiver:
         self._new_threads()
         if autostart:
             self.start()
+
+    def __getitem__(self, name):
+        """Allows instances to be indexed for their buffers by stream name.
+
+        Example:
+            >>> assert my_receiver[name] is my_receiver.buffers[name]
+        """
+        return self.buffers[name]
 
     @classmethod
     def record(cls, duration, **kwargs):
@@ -174,9 +188,9 @@ class Receiver:
         """Streaming thread."""
         inlets = self._inlets
         try:
-            while self._proceed:
-                samples, timestamps = inlets[name].pull_chunk(timeout=0.1)
-                #print(name, samples, timestamps)
+            while self._proceed[name]:
+                samples, timestamps = inlets[name].pull_chunk(timeout=0.0)
+
                 if timestamps:
                     if self._dejitter:
                         try:
@@ -197,12 +211,12 @@ class Receiver:
         # break loop in `stream` to cause thread to return
         if names is None:
             names = self._inlets.keys()
-        self._proceed = False
+        self._proceed = dict(zip(names, [False] * len(names)))
         # create new threads
         for name in names:
             self._threads[name] = threading.Thread(target=self._receive,
                                                    kwargs=dict(name=name))
-        self._proceed = True
+        self._proceed = dict(zip(names, [True] * len(names)))
 
     def _dejitter_timestamps(self, name, timestamps):
         """Partial function for more concise call during loop."""
@@ -250,7 +264,7 @@ def streams_dict_from_streams(streams):
             are stream types and the values are stream.
     """
     source_ids = set(stream[0] for stream in streams)
-    streams_dict = dict.fromkeys(source_ids, {})
+    streams_dict = dict(zip(source_ids, [{} for _ in source_ids]))
     for source_id, stream_type, stream_info in streams:
         streams_dict[source_id][stream_type] = stream_info
     return streams_dict
@@ -296,9 +310,11 @@ def get_lsl_inlets(streams=None, with_source_ids=('',), with_types=('',),
             list(streams.values())[0].keys()
         except AttributeError:
             streams = streams_dict_from_streams(streams)
+        except IndexError:
+            pass
     streams_dict = streams
 
-    inlets = dict.fromkeys(streams_dict.keys(), {})
+    inlets = dict(zip(streams_dict.keys(), [{} for _ in streams_dict]))
     for source_id, streams in streams_dict.items():
         if any(id_str in source_id for id_str in with_source_ids):
             for stream_type, stream in streams.items():
