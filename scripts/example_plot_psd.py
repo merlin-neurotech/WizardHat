@@ -11,6 +11,6 @@ plot_stream = "EEG"
 if __name__ == '__main__':
     dummy_outlet = ble2lsl.Dummy(device)
     receiver = acquire.Receiver()
-    psd = transform.PSD(receiver.buffers[plot_stream])
+    psd = transform.PSD(receiver[plot_stream])
     plot.Spectra(psd.buffer_out)
     #plot.Lines(receiver.buffers[plot_stream])

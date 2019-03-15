@@ -13,4 +13,4 @@ plot_stream = 'EEG'
 if __name__ == '__main__':
     streamer = ble2lsl.Streamer(device)
     receiver = acquire.Receiver()
-    plot.Lines(receiver.buffers[plot_stream])
+    plot.Lines(receiver[plot_stream])
